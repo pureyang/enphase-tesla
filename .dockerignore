@@ -1,0 +1,7 @@
+node_modules
+data
+.env
+.git
+.venv-esphome
+esphome
+*.log

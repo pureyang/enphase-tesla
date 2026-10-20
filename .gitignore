@@ -1,0 +1,9 @@
+node_modules/
+.env
+data/
+*.log
+
+# ESPHome build + secrets
+.venv-esphome/
+esphome/secrets.yaml
+esphome/.esphome/

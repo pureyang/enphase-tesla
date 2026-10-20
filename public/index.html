@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Enphase Live</title>
+  <link rel="stylesheet" href="/vendor/uPlot.min.css">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="dot"></span> Enphase Live</div>
+    <nav class="tabs" id="tabs">
+      <button data-tab="live" class="on">Live</button>
+      <button data-tab="ev">EV</button>
+      <button data-tab="history">History</button>
+      <button data-tab="battery">Battery</button>
+      <button data-tab="grid">Grid</button>
+      <button data-tab="array">Array</button>
+      <button data-tab="system">System</button>
+    </nav>
+    <div class="conn" id="conn"><span class="badge" id="srcBadge">connecting…</span><span id="age"></span></div>
+  </header>
+
+  <!-- Live status: always visible, on every tab -->
+  <section class="livestrip" id="livestrip">
+    <div class="tile" data-k="pv"><label>Solar</label><b id="v-pv">–</b><small id="s-pv">&nbsp;</small></div>
+    <div class="tile" data-k="load"><label>Home</label><b id="v-load">–</b><small id="s-load">&nbsp;</small></div>
+    <div class="tile" data-k="grid"><label>Grid</label><b id="v-grid">–</b><small id="s-grid">&nbsp;</small></div>
+    <div class="tile" data-k="batt"><label>Battery</label><b id="v-batt">–</b><small id="s-batt">&nbsp;</small></div>
+    <div class="tile soc" data-k="soc"><label>Charge</label><b id="v-soc">–</b>
+      <div class="socbar"><i id="socfill"></i><em id="backupmark" title="Backup reserve"></em></div>
+      <small id="s-soc">&nbsp;</small></div>
+  </section>
+
+  <main>
+    <section class="panel on" id="tab-live">
+      <div class="card evcard" id="evSummary"><span class="muted">EV advisor starting…</span></div>
+      <div class="grid2">
+        <div class="card">
+          <h3>Energy flow <span class="muted" id="flowNote"></span></h3>
+          <svg id="flow" viewBox="0 0 420 320" role="img" aria-label="Live energy flow"></svg>
+        </div>
+        <div class="card">
+          <h3>Last 15 minutes <span class="muted">· 1 s resolution</span></h3>
+          <div id="liveChart" class="chart"></div>
+          <div id="liveSocChart" class="chart small"></div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Today so far</h3>
+        <div class="kpis" id="todayKpis"></div>
+      </div>
+    </section>
+
+    <section class="panel" id="tab-ev">
+      <div class="card evcard" id="evNow"></div>
+      <div class="card">
+        <h3>Rest of today · forecast <span class="muted" id="evModelNote"></span></h3>
+        <div id="evChart" class="chart tall"></div>
+        <div id="evSocChart" class="chart small"></div>
+      </div>
+      <div class="grid2">
+        <div class="card">
+          <h3>What is the car doing?</h3>
+          <p class="hint">Advice assumes you followed the last message. Correct it here if not.</p>
+          <div class="toolbar">
+            <button id="evStopped">Not charging</button>
+            <label>Charging at <input type="number" id="evAmps" min="5" max="48" value="16" style="width:70px"> A</label>
+            <button id="evCharging">Set</button>
+          </div>
+          <h3 style="margin-top:14px">Notifications</h3>
+          <p class="hint">Install the <b>ntfy</b> app (iOS/Android), tap +, subscribe to this topic:</p>
+          <div class="toolbar"><code id="ntfyUrl"></code><button id="evTest">Send test</button></div>
+        </div>
+        <div class="card"><h3>Sent</h3><div id="evLog" class="kv"></div></div>
+      </div>
+    </section>
+
+    <section class="panel" id="tab-history">
+      <div class="toolbar">
+        <div class="seg" id="presets">
+          <button data-p="1h">1h</button><button data-p="6h">6h</button><button data-p="today" class="on">Today</button>
+          <button data-p="24h">24h</button><button data-p="7d">7d</button><button data-p="30d">30d</button>
+        </div>
+        <label>From <input type="datetime-local" id="from"></label>
+        <label>To <input type="datetime-local" id="to"></label>
+        <button id="apply">Apply</button>
+        <button id="back" title="Undo zoom">↶ Zoom out</button>
+        <span class="muted" id="resNote"></span>
+        <a id="csv" class="btn" href="#">Export CSV (1 s)</a>
+      </div>
+      <p class="hint">Drag across a chart to zoom. Spans ≤ 6 h load every second; longer spans load averaged buckets with min/max.</p>
+      <div class="card"><h3>Power</h3><div id="histChart" class="chart tall"></div></div>
+      <div class="card"><h3>Battery state of charge</h3><div id="histSoc" class="chart small"></div></div>
+      <div class="card"><h3>Energy in range</h3><div class="kpis" id="rangeKpis"></div></div>
+    </section>
+
+    <section class="panel" id="tab-battery">
+      <div class="card"><h3>Battery units</h3><div class="units" id="units"></div></div>
+      <div class="card"><h3>SOC and battery power · last 24 h</h3><div id="battChart" class="chart tall"></div></div>
+      <div class="card"><h3>Battery analytics · last 24 h</h3><div class="kpis" id="battKpis"></div></div>
+    </section>
+
+    <section class="panel" id="tab-grid">
+      <div class="card"><h3>Voltage · last 6 h</h3><div id="voltChart" class="chart"></div></div>
+      <div class="card"><h3>Frequency · last 6 h</h3><div id="hzChart" class="chart small"></div></div>
+      <div class="card"><h3>Grid relay</h3><div id="relayInfo" class="kv"></div></div>
+    </section>
+
+    <section class="panel" id="tab-array">
+      <div class="card"><h3>Microinverters <span class="muted" id="invNote"></span></h3><div class="inv" id="inv"></div></div>
+    </section>
+
+    <section class="panel" id="tab-system">
+      <div class="grid2">
+        <div class="card"><h3>Sources</h3><div id="sources" class="kv"></div></div>
+        <div class="card"><h3>Logger</h3><div id="dbinfo" class="kv"></div></div>
+      </div>
+      <div class="card"><h3>Log</h3><pre id="log" class="log"></pre></div>
+    </section>
+  </main>
+
+  <script src="/vendor/uPlot.iife.min.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

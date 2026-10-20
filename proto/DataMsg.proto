@@ -1,0 +1,17 @@
+// Livestream Data Channel Message
+syntax = "proto3";
+
+import "MeterSummaryData.proto";
+import "HemsStreamMessage.proto";
+
+message DataMsg {
+  int32 protocol_ver = 1;
+  uint64 timestamp = 2;
+  MeterSummaryData meters = 3;
+  BattMode batt_mode = 4;
+  int32 backup_soc = 5;
+  repeated DryContactStatus dry_contact_relay_status = 6;
+  repeated DryContactName dry_contact_relay_name = 7;
+  repeated LoadStatus load_status = 8;
+  PowerMatchStatus power_match_status = 9;
+}

@@ -1,0 +1,89 @@
+:root {
+  --bg: #f4f6f8; --card: #ffffff; --ink: #14202b; --muted: #66727e; --line: #e2e7ec;
+  --pv: #e8a400; --load: #2f7de1; --grid: #6b7785; --batt: #1aa260; --soc: #12a38a; --warn: #d9480f;
+  --accent: #f37321;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1418; --card: #172027; --ink: #e7edf2; --muted: #93a1ad; --line: #26323b;
+    --pv: #ffc23d; --load: #5aa2ff; --grid: #a3afba; --batt: #3fd18a; --soc: #34d3b5;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e1418; --card: #172027; --ink: #e7edf2; --muted: #93a1ad; --line: #26323b;
+  --pv: #ffc23d; --load: #5aa2ff; --grid: #a3afba; --batt: #3fd18a; --soc: #34d3b5;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+.muted { color: var(--muted); font-weight: 400; }
+button, .btn, input { font: inherit; color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; cursor: pointer; text-decoration: none; }
+button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+.topbar { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 16px; padding: 10px 16px; background: var(--card); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.brand { font-weight: 700; display: flex; align-items: center; gap: 8px; }
+.brand .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); }
+.tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+.tabs button { border: 0; background: transparent; }
+.tabs button.on { background: var(--accent); color: #fff; }
+.conn { margin-left: auto; display: flex; gap: 8px; align-items: center; color: var(--muted); font-variant-numeric: tabular-nums; }
+.badge { padding: 3px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; background: var(--line); }
+.badge.local { background: var(--batt); color: #04130b; }
+.badge.cloud { background: var(--load); color: #fff; }
+.badge.none { background: var(--warn); color: #fff; }
+
+.livestrip { position: sticky; top: 53px; z-index: 4; display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; padding: 10px 16px; background: var(--bg); border-bottom: 1px solid var(--line); }
+.tile { background: var(--card); border: 1px solid var(--line); border-left: 4px solid var(--c, var(--line)); border-radius: 10px; padding: 8px 12px; min-width: 0; }
+.tile label { display: block; font-size: 12px; color: var(--muted); }
+.tile b { display: block; font-size: 24px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tile small { color: var(--muted); font-size: 12px; }
+.tile[data-k="pv"] { --c: var(--pv); } .tile[data-k="load"] { --c: var(--load); }
+.tile[data-k="grid"] { --c: var(--grid); } .tile[data-k="batt"] { --c: var(--batt); } .tile[data-k="soc"] { --c: var(--soc); }
+.socbar { position: relative; height: 6px; background: var(--line); border-radius: 3px; margin: 4px 0 2px; }
+.socbar i { position: absolute; inset: 0 auto 0 0; background: var(--soc); border-radius: 3px; transition: width .6s; }
+.socbar em { position: absolute; top: -3px; width: 2px; height: 12px; background: var(--warn); }
+.stale .tile b { opacity: .45; }
+
+main { padding: 12px 16px 40px; max-width: 1400px; margin: 0 auto; }
+.panel { display: none; } .panel.on { display: block; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin-bottom: 12px; min-width: 0; }
+.card h3 { margin: 0 0 8px; font-size: 14px; }
+.grid2 { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 12px; }
+.grid2 > .card { margin-bottom: 0; } .grid2 { margin-bottom: 12px; }
+.chart { width: 100%; height: 260px; } .chart.tall { height: 340px; } .chart.small { height: 140px; }
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 6px; }
+.seg { display: flex; gap: 2px; }
+.hint { color: var(--muted); font-size: 12px; margin: 0 0 10px; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.kpi { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; }
+.kpi label { display: block; font-size: 12px; color: var(--muted); }
+.kpi b { font-size: 18px; font-variant-numeric: tabular-nums; }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; font-variant-numeric: tabular-nums; }
+.kv dt { color: var(--muted); } .kv dd { margin: 0; overflow-wrap: anywhere; }
+.units { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; }
+.unit { border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
+.inv { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 6px; }
+.inv div { border-radius: 8px; padding: 6px; font-size: 12px; color: #111; text-align: center; }
+.evcard { border-left: 4px solid var(--accent); }
+.evcard .big { font-size: 20px; font-weight: 700; }
+.evcard .go { color: var(--batt); } .evcard .stop { color: var(--warn); }
+code { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; overflow-wrap: anywhere; }
+.log { max-height: 360px; overflow: auto; font-size: 12px; margin: 0; white-space: pre-wrap; }
+
+#flow text { fill: var(--ink); font-size: 13px; text-anchor: middle; font-variant-numeric: tabular-nums; }
+#flow .lbl { fill: var(--muted); font-size: 11px; }
+#flow circle.node { fill: var(--card); stroke-width: 3; }
+#flow path.wire { fill: none; stroke: var(--line); stroke-width: 3; }
+#flow path.flowing { fill: none; stroke-width: 3; stroke-dasharray: 6 8; animation: dash var(--spd, 1s) linear infinite; }
+@keyframes dash { to { stroke-dashoffset: -28; } }
+.uplot, .u-legend { color: var(--ink); }
+.u-legend { font-size: 12px; }
+
+@media (max-width: 900px) {
+  .grid2 { grid-template-columns: 1fr; }
+  .livestrip { grid-template-columns: repeat(3, 1fr); top: 92px; }
+  .tile b { font-size: 18px; }
+}
+@media (max-width: 520px) {
+  .livestrip { grid-template-columns: repeat(2, 1fr); position: static; }
+  .topbar { gap: 8px; }
+}

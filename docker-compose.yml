@@ -1,0 +1,29 @@
+# docker compose up -d --build
+# Data (SQLite, tokens, reports) lives in ./data on the host, so it survives rebuilds and moves with the folder.
+# The container can't resolve envoy.local (no mDNS): set GATEWAY_HOST and TESLA_BLE_HOST to IPs in .env.
+services:
+  enphase-live:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      HOST: 0.0.0.0             # listen inside the container; the port mapping below controls exposure
+      TZ: ${TZ:-America/Los_Angeles}
+    ports:
+      - "127.0.0.1:8787:8787"   # this machine only; use "8787:8787" to open it to phones on the LAN
+    volumes:
+      - ./data:/app/data
+
+  # Optional: ESPHome dashboard for over-the-air updates of the Tesla BLE bridge.
+  #   docker compose --profile esphome up -d   -> http://localhost:6052
+  # (First flash over USB is easier from the host; see README.)
+  esphome:
+    image: ghcr.io/esphome/esphome:2026.9.1
+    profiles: [esphome]
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-America/Los_Angeles}
+    ports:
+      - "127.0.0.1:6052:6052"
+    volumes:
+      - ./esphome:/config
