@@ -45,7 +45,11 @@ export const config = {
     intervalS: Math.max(30, Number(env.EV_CONTROL_INTERVAL_S || 60)),
     from: env.EV_AUTO_FROM || '',        // YYYY-MM-DD: first day to take control
     overrideMin: Number(env.EV_OVERRIDE_MIN || 120), // pause after a manual change in the Tesla app
-    carKwh: Number(env.EV_CAR_KWH || 75), // usable pack size, for the expected-SOC estimate
+    // Raise the car's charge limit to this when the house battery is full and the car hit its limit (0 = off).
+    limitRaiseTo: Number(env.EV_LIMIT_RAISE_TO ?? 90),
+    carKwh: Number(env.EV_CAR_KWH || 75),
+    // Max Wh a day the car may borrow from the house battery to ride through a dip at min amps (0 = never).
+    loanWh: Number(env.EV_LOAN_WH ?? 200), // usable pack size, for the expected-SOC estimate
   },
   gateway: {
     host: env.GATEWAY_HOST || '',

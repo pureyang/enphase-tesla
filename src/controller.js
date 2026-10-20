@@ -5,6 +5,9 @@
 // Below FULL_SOC it follows the advisor's plan (which leaves the house battery enough solar to reach
 // target), capped at real excess. At/above FULL_SOC it tracks live excess minute by minute.
 // A manual change in the Tesla app pauses control for EV_OVERRIDE_MIN.
+// Smoothing: during a short dip the car holds at min amps on a small loan from the house battery
+// (EV_LOAN_WH a day, repaid from solar before the car gets more), and a plan that only pushes the
+// window back by <= STICKY_S doesn't stop a running session. State survives restarts (ev_state.json).
 import { config } from './config.js';
 import { db, writeNotification } from './db.js';
 import { notify } from './notify.js';
@@ -16,18 +19,24 @@ const START_TICKS = 2;     // target must allow charging this many ticks in a ro
 const STOP_TICKS = 3;      // ...and must be below min amps this many ticks before stopping
 const DAYLIGHT_W = 100;    // below this solar it's night: only stop sessions we started
 const CAR_CHARGE_EFF = 0.9; // wall -> pack
+const REPAY_W = 500;       // while the loan is open, this much of the excess goes to the house battery first
+const STICKY_S = 3600;     // keep charging if the plan's next window starts within this
+const PLAN_MAX_AGE_S = 900; // a saved plan is used after a restart until the advisor has a fresh one
 
 export class Controller {
   constructor(collector, tesla, advisor) {
     this.collector = collector;
     this.tesla = tesla;
     this.advisor = advisor;
-    this.expect = null;       // what the car should be doing after our last command
-    this.ownSession = false;  // true if we started the current session
-    this.pausedUntil = 0;
+    const saved = advisor.state.control || {};
+    this.expect = saved.expect ?? null;       // what the car should be doing after our last command
+    this.ownSession = saved.ownSession ?? false; // true if we started the current session
+    this.pausedUntil = saved.pausedUntil ?? 0;
+    this.loan = saved.loan ?? { day: null, wh: 0 }; // Wh the car borrowed from the house battery today
+    this.wasCharging = saved.wasCharging ?? null;
+    this.lastTick = 0;
     this.startCount = 0;
     this.stopCount = 0;
-    this.wasCharging = null;
     this.status = { enabled: config.control.enabled, active: false, reason: 'starting' };
   }
 
@@ -47,13 +56,30 @@ export class Controller {
     return !config.control.from || new Date().toLocaleDateString('en-CA') >= config.control.from;
   }
 
+  persist() {
+    this.advisor.state.control = { expect: this.expect, ownSession: this.ownSession, pausedUntil: this.pausedUntil, loan: this.loan, wasCharging: this.wasCharging };
+    this.advisor.save();
+  }
+
+  // The advisor's latest plan, or the one saved before a restart if it's still recent.
+  plan(now) {
+    if (this.advisor.last && this.advisor.last.plan) return { plan: this.advisor.last.plan, want: this.advisor.last.want };
+    const lp = this.advisor.state.lastPlan;
+    return lp && now - lp.at < PLAN_MAX_AGE_S ? { plan: lp.plan, want: lp.want } : { plan: null, want: null };
+  }
+
   async tick() {
+    try { await this.step(); } finally { this.persist(); }
+  }
+
+  async step() {
     const now = Math.floor(Date.now() / 1000);
     const car = this.tesla.live();
     const set = (reason, extra = {}) => { this.status = { enabled: true, active: false, at: now, reason, ...extra }; };
     if (config.control.from && new Date().toLocaleDateString('en-CA') < config.control.from) return set(`Starts ${config.control.from}`);
     if (!car) return set('Car not reachable over Bluetooth');
     await this.watchTransitions(now, car);
+    await this.manageLimit(now, car).catch((e) => log.warn('control', `charge limit: ${e.message}`));
     if (car.pluggedIn === false || ['Complete', 'Disconnected'].includes(car.state)) {
       this.expect = null; this.ownSession = false;
       return set(car.pluggedIn === false ? 'Car not plugged in' : `Car ${car.state}`);
@@ -78,14 +104,22 @@ export class Controller {
     const exportW = Math.max(0, -r.grid);
     const importW = Math.max(0, r.grid);
 
+    // Loan: battery discharge while the car charges is borrowed; battery charging repays it. Resets daily.
+    const today = new Date().toLocaleDateString('en-CA');
+    if (this.loan.day !== today) this.loan = { day: today, wh: 0 };
+    const dtH = this.lastTick ? Math.min(now - this.lastTick, 3 * config.control.intervalS) / 3600 : 0;
+    this.lastTick = now;
+    if (car.charging && r.batt > 0) this.loan.wh += r.batt * dtH;
+    else if (r.batt < 0) this.loan.wh = Math.max(0, this.loan.wh + r.batt * dtH);
+
     // At night leave manual sessions alone; stop only what we started.
     if (r.pv < DAYLIGHT_W) {
       if (car.charging && this.ownSession) return this.command(now, car, 0, 'Solar is down', { excessW, soc: r.soc });
       return set('Night: not managing', { excessW: Math.round(excessW), soc: r.soc });
     }
 
-    const plan = this.advisor.last && this.advisor.last.plan;
-    let targetW, mode;
+    const { plan, want } = this.plan(now);
+    let targetW, mode, planSaysNo = false;
     if (r.soc >= FULL_SOC) {
       // Battery nearly full: anything the car doesn't take is exported. Keep what the battery needs to top up.
       let reserveW = 0;
@@ -96,18 +130,31 @@ export class Controller {
       targetW = excessW - reserveW - MARGIN_W;
       mode = 'live excess';
     } else {
-      const want = this.advisor.last && this.advisor.last.want;
-      targetW = want && want.charging ? Math.min(want.amps * volts, excessW - MARGIN_W) : 0;
       mode = 'plan';
+      let planW = want && want.charging ? want.amps * volts : 0;
+      // Sticky plan: a running session isn't stopped just because the window moved back a little.
+      const b = plan && plan.best;
+      if (!planW && car.charging && b && b.startTs - now <= STICKY_S) { planW = b.amps * volts; mode = 'plan (sticky)'; }
+      planSaysNo = !planW;
+      targetW = planW ? Math.min(planW, excessW - MARGIN_W) : 0;
     }
     // Priority 1: exporting with room on the car? Take it.
     if (exportW > MARGIN_W) targetW = Math.max(targetW, carW + exportW - MARGIN_W);
+    // Repay the loan before giving the car more.
+    if (this.loan.wh > 1 && !planSaysNo) targetW = Math.min(targetW, excessW - MARGIN_W - REPAY_W);
     // Priority 2: importing while charging? Back off by that much.
     if (car.charging && importW > MARGIN_W) targetW = Math.min(targetW, carW - importW);
 
     let next = Math.min(config.ev.maxAmps, Math.floor(targetW / volts));
     if (next < config.ev.minAmps) next = 0;
-    const info = { mode, excessW, exportW, importW, soc: r.soc, targetW };
+    const info = { mode, excessW, exportW, importW, soc: r.soc, targetW, loanWh: this.loan.wh };
+    // Dip, not a plan change: hold at min amps while the loan has room (or solar still covers min amps).
+    const minW = config.ev.minAmps * volts;
+    if (car.charging && next === 0 && !planSaysNo && r.pv >= DAYLIGHT_W
+        && (excessW >= minW || this.loan.wh < config.control.loanWh)) {
+      next = config.ev.minAmps;
+      info.mode = `${mode}, holding on ${Math.round(this.loan.wh)}/${config.control.loanWh} Wh loan`;
+    }
 
     if (!car.charging) {
       this.startCount = next > 0 ? this.startCount + 1 : 0;
@@ -121,15 +168,25 @@ export class Controller {
     this.status.active = true;
   }
 
+  // A sleeping car drops settings, so wake it and wait (up to 45 s) before sending any.
+  async wakeIfAsleep(car) {
+    if (!car.asleep) return;
+    await this.tesla.wake();
+    for (let i = 0; i < 15 && this.tesla.current().asleep; i++) await new Promise((r) => setTimeout(r, 3000));
+  }
+
   // amps 0 = stop. Sets amps before starting so the car never starts at an old, higher setting.
   async command(now, car, amps, reason, info) {
     const was = car.charging ? Math.round(car.ampsSet ?? 0) : 0;
     const kind = amps === 0 ? 'STOP' : !car.charging ? 'START' : 'ADJUST';
     let ok = true;
     try {
-      if (car.asleep) await this.tesla.wake();
+      await this.wakeIfAsleep(car);
       if (amps > 0) await this.tesla.setAmps(amps);
-      if (amps > 0 && !car.charging) await this.tesla.setCharging(true);
+      if (amps > 0 && !car.charging) {
+        await this.tesla.setCharging(true);
+        await this.tesla.setAmps(amps); // re-send once charging: the car can start at its previous setting
+      }
       if (amps === 0) await this.tesla.setCharging(false);
     } catch (e) {
       ok = false;
@@ -147,6 +204,41 @@ export class Controller {
     this.status = { enabled: true, active: true, at: now, reason: title, ...round(info) };
 
     writeNotification({ ts: now, kind: `AUTO_${kind}`, title, body: ok ? body : `${body} Command FAILED.`, amps, sent: false, error: ok ? 'log only' : 'command failed' });
+  }
+
+  // Option 2 charge limit: when the house battery is full and the car has reached its own limit, raise the
+  // limit to EV_LIMIT_RAISE_TO so spare solar goes into the car instead of the grid. Restored after sunset
+  // (or the next day). A limit change by you in the meantime cancels the restore.
+  async manageLimit(now, car) {
+    const st = this.advisor.state;
+    const today = new Date().toLocaleDateString('en-CA');
+    const r = db.prepare('SELECT AVG(pv) AS pv, AVG(load) AS load, AVG(soc) AS soc, COUNT(*) AS n FROM samples WHERE ts >= ? AND src = 1')
+      .get(now - config.control.intervalS);
+    if (r.n < config.control.intervalS / 2 || car.limit == null) return;
+    const lr = st.limitRaise;
+    if (lr) {
+      if (car.limit !== lr.to) { delete st.limitRaise; this.advisor.save(); log.info('control', `charge limit changed to ${car.limit}% outside the app; not restoring`); return; }
+      if (r.pv < DAYLIGHT_W || lr.day !== today) {
+        await this.wakeIfAsleep(car);
+        await this.tesla.setLimit(lr.from);
+        delete st.limitRaise; this.advisor.save();
+        writeNotification({ ts: now, kind: 'AUTO_LIMIT', title: `Auto: car charge limit back to ${lr.from}%`, body: 'Solar is down.', amps: null, sent: false, error: 'log only' });
+        log.info('control', `charge limit restored to ${lr.from}%`);
+      }
+      return;
+    }
+    const to = config.control.limitRaiseTo;
+    if (!to || car.battery == null || car.limit >= to || car.pluggedIn === false || r.soc < FULL_SOC || r.pv < DAYLIGHT_W) return;
+    const volts = car.voltage > 180 ? car.voltage : 240;
+    const carW = car.charging ? (car.current ?? 0) * volts : 0;
+    const spareW = r.pv - (r.load - carW) - MARGIN_W;
+    if (car.battery < car.limit - 1 || spareW < config.ev.minAmps * volts) return;
+    await this.wakeIfAsleep(car);
+    await this.tesla.setLimit(to);
+    st.limitRaise = { from: car.limit, to, day: today }; this.advisor.save();
+    await notify({ kind: 'AUTO_LIMIT', title: `Raised car charge limit ${car.limit}% -> ${to}%`,
+      body: `House battery is full (${Math.round(r.soc)}%) and the car reached ${car.battery}%, so ${(spareW / 1000).toFixed(1)} kW of solar would go to the grid. Back to ${car.limit}% after sunset.`,
+      priority: 3, tags: ['red_car', 'sunny'] });
   }
 
   // Push when the car starts or stops charging, whoever caused it (us, the Tesla app, or the car at its limit).
@@ -174,7 +266,8 @@ export class Controller {
 
   // Car SOC at the end of today's planned solar window: plan energy left x charging efficiency, capped at the car's limit.
   expectedCarSoc(now, car) {
-    const b = this.advisor.last && this.advisor.last.plan && this.advisor.last.plan.best;
+    const { plan } = this.plan(now);
+    const b = plan && plan.best;
     if (car.battery == null || !b || b.endTs <= now) return null;
     const wh = b.watts * (b.endTs - Math.max(now, b.startTs)) / 3600;
     const soc = Math.min(car.limit || 100, car.battery + (wh * CAR_CHARGE_EFF) / (config.control.carKwh * 1000) * 100);

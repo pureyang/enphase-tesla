@@ -74,7 +74,13 @@ Every `EV_CONTROL_INTERVAL_S` (default 60 s), `src/controller.js` sets the car's
 
 - House battery below 95%: follows the advisor's plan, so the battery still reaches `EV_TARGET_SOC`.
 - 95% and above: tracks live excess minute by minute, keeping back what the battery needs to top off.
-- Starts need 2 good minutes in a row, stops need 3, so a passing cloud doesn't flap the charger.
+- Starts need 2 good minutes in a row. During a cloud the car drops to min amps and borrows from the
+  house battery (up to `EV_LOAN_WH`, default 200 Wh/day) instead of stopping; the loan is repaid from
+  solar before the car gets more. It stops ~3 min after the loan runs out.
+- A plan that only moves the car's window back by an hour or less doesn't stop a running session.
+- When the house battery is full and the car reaches its own charge limit, the limit is raised to
+  `EV_LIMIT_RAISE_TO` (default 90%) so solar goes to the car instead of the grid, then put back after sunset.
+- Session, loan and plan are saved in `data/ev_state.json`, so a restart doesn't reset them.
 - At night it only stops sessions it started; your own overnight charging is left alone.
 - A change in the Tesla app pauses control for `EV_OVERRIDE_MIN` (default 120).
 - Pushes when charging starts (with the expected ending car battery %) and when it stops.
@@ -96,6 +102,8 @@ at most one per `NOTIFY_MIN_INTERVAL_MIN`.
 | `EV_AUTO_FROM` | | First day (YYYY-MM-DD) to take control |
 | `EV_OVERRIDE_MIN` | 120 | Back-off after a manual change |
 | `EV_CAR_KWH` | 75 | Usable pack size, for the expected-SOC estimate |
+| `EV_LOAN_WH` | 200 | Daily house-battery loan to ride through clouds at min amps |
+| `EV_LIMIT_RAISE_TO` | 90 | Car charge limit used when the house battery is full (0 = off) |
 | `TESLA_BLE_HOST` / `_USER` / `_PASSWORD` | | Bridge address and web login |
 | `NTFY_TOPIC` | auto | Push topic (generated if blank) |
 

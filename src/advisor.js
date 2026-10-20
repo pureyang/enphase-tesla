@@ -209,6 +209,9 @@ export class Advisor {
     const nextAllowedTs = this.state.lastNotifyTs + config.ev.minIntervalMin * 60;
 
     this.last = { at: now, plan: summarize(p), want, have, pending: this.state.pending, nextAllowedTs, model: modelSummary(this.model) };
+    // Saved so the controller can keep following the plan right after a restart.
+    const sp = this.last.plan;
+    this.state.lastPlan = { at: now, want, plan: sp.ok ? { ok: true, solarEnd: sp.solarEnd, capacityWh: sp.capacityWh, best: sp.best } : { ok: false } };
 
     // With auto control on, the controller drives the car and sends its own start/stop pushes.
     if (kind && kind !== 'PLAN' && this.controller && this.controller.active()) { this.save(); return this.last; }

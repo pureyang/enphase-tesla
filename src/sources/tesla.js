@@ -139,6 +139,7 @@ export class TeslaSource extends EventEmitter {
   }
   wake() { return this.post(`button/${encodeURIComponent('Wake up')}/press`); }
   setAmps(a) { return this.post(`number/${encodeURIComponent('Charging Amps')}/set?value=${Math.round(a)}`); }
+  setLimit(pct) { return this.post(`number/${encodeURIComponent('Charging Limit')}/set?value=${Math.round(pct)}`); }
   setCharging(on) { return this.post(`switch/Charger/${on ? 'turn_on' : 'turn_off'}`); }
 
   // Fresh reading for the advisor, or null if the bridge is offline or not talking to the car.
