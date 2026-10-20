@@ -131,7 +131,7 @@ const routes = {
   },
   '/api/tesla': (req, res, q) => {
     const [from, to] = range(q);
-    sendJson(res, { status: tesla.status, latest: tesla.current(), series: store.evSeries(from, to) });
+    sendJson(res, { status: tesla.status, latest: tesla.current(), series: store.evSeries(from, to), events: store.evEvents(from, to) });
   },
   '/api/cloud-intervals': (req, res, q) => {
     const [from, to] = range(q);

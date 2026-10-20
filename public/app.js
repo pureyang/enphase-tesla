@@ -75,16 +75,67 @@ function axes(yFmt) {
   ];
 }
 
-function powerChart(el, { sync, onZoom, bands } = {}) {
+// Vertical markers where the car started/stopped charging (auto control or manual), labelled at the top.
+function evMarkersPlugin(getEvents) {
+  return {
+    hooks: {
+      draw: [(u) => {
+        const evs = getEvents(); if (!evs || !evs.length) return;
+        const { ctx } = u; const { left, top, width, height } = u.bbox;
+        const dpr = devicePixelRatio || 1;
+        ctx.save(); ctx.beginPath(); ctx.rect(left, top, width, height); ctx.clip();
+        ctx.strokeStyle = ctx.fillStyle = css('--ev'); ctx.lineWidth = 1.5 * dpr; ctx.setLineDash([4 * dpr, 4 * dpr]);
+        ctx.font = `600 ${11 * dpr}px system-ui`; ctx.textBaseline = 'top';
+        evs.forEach((e, i) => {
+          const x = u.valToPos(e.ts, 'x', true); if (x < left || x > left + width) return;
+          ctx.beginPath(); ctx.moveTo(x, top); ctx.lineTo(x, top + height); ctx.stroke();
+          ctx.fillText(e.label, x + 4 * dpr, top + (4 + (i % 2) * 14) * dpr);
+        });
+        ctx.restore();
+      }],
+    },
+  };
+}
+
+// Car events -> marker labels. Auto commands win; a car-side start/stop shows only if auto control didn't cause it.
+function evMarkers(events) {
+  const out = [];
+  for (const e of events || []) {
+    if (e.kind === 'AUTO_START') out.push({ ts: e.ts, label: `EV start ${e.amps} A (auto)` });
+    else if (e.kind === 'AUTO_STOP') out.push({ ts: e.ts, label: 'EV stop (auto)' });
+    else if (e.kind === 'AUTO_LIMIT') out.push({ ts: e.ts, label: e.title.replace(/^Auto: /, '') });
+    else if (!/by auto control/.test(e.body || '')) out.push({ ts: e.ts, label: e.kind === 'EV_STARTED' ? 'EV start (manual)' : /limit/.test(e.body) ? 'EV full' : 'EV stop (manual)' });
+  }
+  return out;
+}
+
+// Car power on the chart's time grid: last bridge sample within 30 s (or the bucket size) of each point.
+function evOnGrid(t, samples, res) {
+  const out = new Array(t.length).fill(null);
+  let j = 0;
+  for (let i = 0; i < t.length; i++) {
+    while (j + 1 < samples.length && samples[j + 1].ts <= t[i]) j++;
+    const s = samples[j];
+    if (!s || s.ts > t[i] || t[i] - s.ts > Math.max(30, res)) continue;
+    out[i] = s.charging ? (s.current != null && s.voltage > 180 ? s.current * s.voltage : s.power_w || 0) : 0;
+  }
+  return out;
+}
+
+// soc: overlay house-battery SOC on a right-hand 0-100% axis, so grid import can be read against charge level.
+// ev: add the car's charging power as its own trace, with start/stop markers from events().
+function powerChart(el, { sync, onZoom, bands, soc, ev, events } = {}) {
+  const ax = axes((v) => fmtW(v, true));
+  if (soc) ax.push({ scale: '%', side: 1, stroke: css('--soc'), grid: { show: false }, size: 52, values: (u, v) => v.map((x) => `${x}%`) });
   const opts = {
     width: el.clientWidth, height: el.clientHeight - 40,
     cursor: { sync: sync ? { key: sync } : undefined, drag: { x: Boolean(onZoom), y: false } },
-    scales: { x: { time: true } },
+    scales: { x: { time: true }, ...(soc ? { '%': { range: [0, 100] } } : {}) },
     series: [{}, ...SERIES.map((s) => ({
       label: s.label, stroke: css(s.color), width: 1.5, value: (u, v) => fmtW(v, true), points: { show: false },
-    }))],
-    axes: axes((v) => fmtW(v, true)),
-    plugins: bands ? [bandsPlugin(bands)] : [],
+    })), ...(ev ? [{ label: 'EV charging', stroke: css('--ev'), fill: css('--ev') + '33', width: 2, value: (u, v) => (v == null ? '–' : fmtW(v, true)), points: { show: false } }] : []), ...(soc ? [{ label: 'Battery SOC', scale: '%', stroke: css('--soc'), width: 2, dash: [6, 4], value: (u, v) => (v == null ? '–' : `${v.toFixed(0)}%`), points: { show: false } }] : [])],
+    axes: ax,
+    plugins: [...(bands ? [bandsPlugin(bands)] : []), ...(events ? [evMarkersPlugin(events)] : [])],
     hooks: onZoom ? { setSelect: [(u) => {
       if (u.select.width < 5) return;
       const a = u.posToVal(u.select.left, 'x'), b = u.posToVal(u.select.left + u.select.width, 'x');
@@ -92,7 +143,7 @@ function powerChart(el, { sync, onZoom, bands } = {}) {
       onZoom(Math.floor(a), Math.ceil(b));
     }] } : {},
   };
-  const u = new uPlot(opts, [[], [], [], [], []], el);
+  const u = new uPlot(opts, opts.series.map(() => []), el);
   autoSize(u, el);
   return u;
 }
@@ -246,20 +297,22 @@ const fromLocalInput = (v) => Math.floor(new Date(v) / 1000);
 async function loadHistory() {
   if (!hist.chart) {
     hist.chart = powerChart($('histChart'), {
-      sync: 'hist', bands: () => (hist.data && hist.data.res > 1 ? hist.data : null),
+      sync: 'hist', soc: true, ev: true, events: () => hist.evEvents, bands: () => (hist.data && hist.data.res > 1 ? hist.data : null),
       onZoom: (a, b) => { hist.stack.push([hist.from, hist.to]); hist.from = a; hist.to = b; loadHistory(); },
     });
     hist.soc = socChart($('histSoc'), { sync: 'hist' });
   }
   $('from').value = toLocalInput(hist.from); $('to').value = toLocalInput(hist.to);
   $('csv').href = `/api/export.csv?from=${hist.from}&to=${hist.to}`;
-  const [d, e] = await Promise.all([
+  const [d, e, car] = await Promise.all([
     getJSON(`/api/series?from=${hist.from}&to=${hist.to}`),
     getJSON(`/api/energy?from=${hist.from}&to=${hist.to}`),
+    getJSON(`/api/tesla?from=${hist.from}&to=${hist.to}`).catch(() => ({ series: [], events: [] })),
   ]);
+  hist.evEvents = evMarkers(car.events);
   hist.data = d;
   $('resNote').textContent = d.res === 1 ? `${d.t.length.toLocaleString()} points · 1 s` : `${d.t.length.toLocaleString()} buckets · ${d.res >= 3600 ? d.res / 3600 + ' h' : d.res / 60 + ' min'} avg (min/max shaded)`;
-  hist.chart.setData([d.t, d.pv, d.load, d.grid, d.batt]);
+  hist.chart.setData([d.t, d.pv, d.load, d.grid, d.batt, evOnGrid(d.t, car.series || [], d.res), d.soc]);
   hist.chart.setScale('x', { min: hist.from, max: hist.to });
   hist.soc.setData([d.t, d.soc]);
   hist.soc.setScale('x', { min: hist.from, max: hist.to });

@@ -157,6 +157,12 @@ export function evSeries(fromSec, toSec) {
   return db.prepare('SELECT * FROM ev_samples WHERE ts >= ? AND ts < ? ORDER BY ts').all(fromSec, toSec);
 }
 
+// Car start/stop/limit events for chart markers.
+export function evEvents(fromSec, toSec) {
+  return db.prepare(`SELECT ts, kind, title, body, amps FROM notifications
+    WHERE ts >= ? AND ts < ? AND kind IN ('AUTO_START', 'AUTO_STOP', 'AUTO_LIMIT', 'EV_STARTED', 'EV_STOPPED') ORDER BY ts`).all(fromSec, toSec);
+}
+
 export function recentNotifications(limit = 20) {
   return db.prepare('SELECT * FROM notifications ORDER BY ts DESC LIMIT ?').all(limit);
 }
