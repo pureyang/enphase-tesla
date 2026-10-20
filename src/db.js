@@ -204,6 +204,15 @@ export function catchUpRollups() {
   leakageSql.run(Math.floor((lastLeak ?? first) / 60) * 60, Math.floor(Date.now() / 60000) * 60);
 }
 
+// Drop per-second rows older than cutoff (RECORD_HISTORY off). Minute rollups and leakage stay.
+export function pruneDetail(cutoffSec) {
+  let n = 0;
+  for (const t of ['samples', 'meter_readings', 'battery_units', 'inverters', 'ev_samples']) {
+    n += Number(db.prepare(`DELETE FROM ${t} WHERE ts < ?`).run(cutoffSec).changes);
+  }
+  return n;
+}
+
 export function leakageSeries(fromSec, toSec, res = 3600) {
   return db.prepare(`SELECT (ts/CAST(? AS INTEGER))*CAST(? AS INTEGER) AS t, SUM(n) AS n, SUM(imp_wh) AS imp_wh, SUM(spike_wh) AS spike_wh,
       SUM(spike_s) AS spike_s, MAX(max_w) AS max_w, SUM(load_wh) AS load_wh, SUM(batt_wh) AS batt_wh, AVG(soc) AS soc

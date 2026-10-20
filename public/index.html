@@ -70,10 +70,13 @@
             <button id="evCharging">Set</button>
           </div>
           <h3 style="margin-top:14px">Notifications</h3>
-          <p class="hint">Install the <b>ntfy</b> app (iOS/Android), tap +, subscribe to this topic:</p>
-          <div class="toolbar"><code id="ntfyUrl"></code><button id="evTest">Send test</button></div>
+          <div id="ntfyOn">
+            <p class="hint">Install the <b>ntfy</b> app (iOS/Android), tap +, subscribe to this topic:</p>
+            <div class="toolbar"><code id="ntfyUrl"></code><button id="evTest">Send test</button></div>
+          </div>
+          <p id="ntfyOff" class="hint" hidden>Phone pushes are off; messages appear here only. Set <code>NOTIFY=1</code> in <code>.env</code> and restart to get them on your phone.</p>
         </div>
-        <div class="card"><h3>Sent</h3><div id="evLog" class="kv"></div></div>
+        <div class="card"><h3>Messages</h3><div id="evLog" class="kv"></div></div>
       </div>
     </section>
 

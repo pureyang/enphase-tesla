@@ -107,7 +107,7 @@ const routes = {
   },
   '/api/inverters': (req, res) => sendJson(res, store.latestInverters()),
   '/api/ev': (req, res) => sendJson(res, {
-    ...(advisor.last || {}), state: advisor.state, control: controller.status, ntfy: ntfyUrl(),
+    ...(advisor.last || {}), state: advisor.state, control: controller.status, ntfy: config.ev.notify ? ntfyUrl() : null,
     notifications: store.recentNotifications(15), settings: config.ev && { ...config.ev, ntfyTopic: undefined },
   }),
   // Re-run the advisor now (e.g. after telling it what the car is doing).
@@ -121,7 +121,8 @@ const routes = {
   },
   '/api/ev/test-notify': async (req, res) => {
     if (req.method !== 'POST') return sendJson(res, { error: 'POST only' }, 405);
-    const ok = await notify({ kind: 'TEST', title: 'Enphase Live test', body: 'EV charging notifications are working.', tags: ['white_check_mark'] });
+    if (!config.ev.notify) return sendJson(res, { ok: false, error: 'Push notifications are off (NOTIFY=1 in .env)' });
+    const ok = await notify({ kind: 'TEST', title: 'Enphase Tesla test', body: 'EV charging notifications are working.', tags: ['white_check_mark'] });
     sendJson(res, { ok });
   },
   // Grid leakage buckets (default hourly): ?from&to&res=60|3600|86400
@@ -139,7 +140,8 @@ const routes = {
   },
   '/api/status': (req, res) => sendJson(res, {
     ...collector.snapshot(), tesla: tesla.status, db: store.stats(), log: log.recent(),
-    config: { siteId: config.enlighten.siteId, gatewayHost: config.gateway.host, preferred: config.preferred },
+    config: { siteId: config.enlighten.siteId, gatewayHost: config.gateway.host, preferred: config.preferred,
+      recordHistory: config.recordHistory, historyHours: config.historyHours, notify: config.ev.notify },
   }),
   '/api/export.csv': (req, res, q) => {
     const [from, to] = range(q);

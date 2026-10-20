@@ -42,6 +42,19 @@ export class Collector extends EventEmitter {
       const now = Math.floor(Date.now() / 1000);
       store.rollup(now - 180, now);
     }, 60_000);
+    if (!config.recordHistory) {
+      const prune = () => {
+        try {
+          // Roll up anything about to go so the minute history has no gaps.
+          const cutoff = Math.floor(Date.now() / 1000) - config.historyHours * 3600;
+          store.rollup(cutoff - 3600, cutoff);
+          const n = store.pruneDetail(cutoff);
+          if (n) log.info('db', `pruned ${n} per-second rows older than ${config.historyHours} h (RECORD_HISTORY=1 keeps them)`);
+        } catch (e) { log.error('db', e.message); }
+      };
+      setTimeout(prune, 30_000);
+      setInterval(prune, 3600_000);
+    }
   }
 
   fresh(name, maxAgeMs) {

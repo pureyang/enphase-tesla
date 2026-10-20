@@ -14,6 +14,10 @@ export const config = {
   host: env.HOST || '127.0.0.1',
   preferred: (env.PREFERRED_SOURCE || 'local').toLowerCase(),
   fallbackAfterS: Number(env.FALLBACK_AFTER_S || 10),
+  // Keep every per-second row forever (~20 GB/yr). Off: per-second rows are kept for the last
+  // HISTORY_HOURS (live charts, car control, nightly report); minute averages are always kept.
+  recordHistory: ['1', 'true', 'on'].includes(String(env.RECORD_HISTORY ?? '').toLowerCase()),
+  historyHours: Math.max(26, Number(env.HISTORY_HOURS || 26)),
   enlighten: {
     base: 'https://enlighten.enphaseenergy.com',
     email: env.ENLIGHTEN_EMAIL || '',
@@ -30,6 +34,8 @@ export const config = {
     safety: Number(env.EV_SAFETY || 0.85),
     targetSoc: Number(env.EV_TARGET_SOC || 99),
     minIntervalMin: Number(env.NOTIFY_MIN_INTERVAL_MIN || 60),
+    // Phone pushes via ntfy are opt-in: NOTIFY=1 (or setting NTFY_TOPIC) turns them on.
+    notify: env.NOTIFY != null && env.NOTIFY !== '' ? ['1', 'true', 'on'].includes(String(env.NOTIFY ?? '').toLowerCase()) : Boolean(env.NTFY_TOPIC),
     ntfyTopic: env.NTFY_TOPIC || '',
     ntfyServer: env.NTFY_SERVER || 'https://ntfy.sh',
   },

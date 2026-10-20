@@ -43,8 +43,17 @@ fi
 set_env GATEWAY_HOST "$(ask 'IQ Gateway IP (Docker needs an IP, not envoy.local)' "$gw")"
 set_env LOCATION "$(ask 'ZIP code or city (weather forecast)' "$(get_env LOCATION)")"
 
-echo; echo "-- Tesla Bluetooth bridge (M5Stack NanoC6 running esphome-tesla-ble) --"
-if [ "$(ask 'Set up the Tesla bridge? (y/N)' "$([ -n "$(get_env TESLA_BLE_HOST)" ] && echo y || echo n)")" = y ]; then
+yn() { [ "$1" = 1 ] && echo y || echo n; }
+echo; echo "-- Optional features --"
+echo "Full history keeps every per-second row forever (~20 GB/yr). Without it: last 26 h per second + minute averages forever."
+set_env RECORD_HISTORY "$([ "$(ask 'Keep full per-second history? (y/N)' "$(yn "$(get_env RECORD_HISTORY)")")" = y ] && echo 1 || echo 0)"
+echo "Phone pushes use the free ntfy app (ntfy.sh). Without them, messages show on the dashboard only."
+set_env NOTIFY "$([ "$(ask 'Send push notifications to your phone? (y/N)' "$(yn "$(get_env NOTIFY)")")" = y ] && echo 1 || echo 0)"
+
+echo; echo "-- Tesla control (optional) --"
+echo 'Needs an M5Stack NanoC6 (~$10, https://shop.m5stack.com/products/m5stack-nanoc6-dev-kit) near where the car parks.'
+echo "Skip this if you only want Enphase monitoring."
+if [ "$(ask 'Set up Tesla control? (y/N)' "$([ -n "$(get_env TESLA_BLE_HOST)" ] && echo y || echo n)")" = y ]; then
   [ -n "$(get_env TESLA_BLE_USER)" ] || set_env TESLA_BLE_USER enphase
   [ -n "$(get_env TESLA_BLE_PASSWORD)" ] || set_env TESLA_BLE_PASSWORD "$(token)"
   set_env EV_CAR_KWH "$(ask 'Car usable battery size, kWh' "$(v=$(get_env EV_CAR_KWH); echo "${v:-75}")")"
@@ -87,4 +96,5 @@ else
   echo "Start with: npm start   (or run it under systemd / launchd to keep it running)"
 fi
 echo; echo "Dashboard: http://localhost:$(v=$(get_env PORT); echo "${v:-8787}")"
-echo "Push notifications: install the ntfy app and subscribe to the topic shown on the EV tab."
+[ "$(get_env NOTIFY)" = 1 ] && echo "Push notifications: install the ntfy app and subscribe to the topic shown on the EV tab."
+true

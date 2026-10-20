@@ -1,4 +1,4 @@
-// Push notifications via ntfy (https://ntfy.sh). Install the ntfy app and subscribe to the topic.
+// Optional push notifications via ntfy (https://ntfy.sh), on with NOTIFY=1. Install the ntfy app and subscribe to the topic.
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -23,6 +23,11 @@ export function ntfyUrl() {
 
 export async function notify({ kind, title, body, amps, priority = 3, tags = [] }) {
   const ts = Math.floor(Date.now() / 1000);
+  // Pushes off: keep the message in the dashboard log only, and count it as delivered.
+  if (!config.ev.notify) {
+    writeNotification({ ts, kind, title, body, amps, sent: true, error: 'push off' });
+    return true;
+  }
   let sent = false, error = null;
   // Laptop Wi-Fi drops briefly after waking; retry a few times before giving up.
   for (let attempt = 0; attempt < 4 && !sent; attempt++) {

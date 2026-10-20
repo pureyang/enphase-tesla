@@ -451,7 +451,8 @@ async function loadEv() {
   $('evSummary').innerHTML = html;
   if (activeTab !== 'ev') return ev;
   $('evNow').innerHTML = html;
-  $('ntfyUrl').textContent = ev.ntfy;
+  $('ntfyOn').hidden = !ev.ntfy; $('ntfyOff').hidden = !!ev.ntfy;
+  if (ev.ntfy) $('ntfyUrl').textContent = ev.ntfy;
   const m = ev.model;
   $('evModelNote').textContent = m ? `· learned from ${Math.round(m.hoursUsed / 24)} days · capacity ${m.capacityWh ? (m.capacityWh / 1000).toFixed(1) + ' kWh' : '?'}`
     + ` · max charge ${(m.maxChargeW / 1000).toFixed(1)} kW · backtest error ${m.mape == null ? '?' : Math.round(m.mape * 100) + '%'}` : '';

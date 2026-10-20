@@ -64,9 +64,19 @@ if ($gw -eq 'envoy.local' -or -not $gw) {
 SetEnv GATEWAY_HOST (Ask 'IQ Gateway IP (Docker needs an IP, not envoy.local)' $gw)
 SetEnv LOCATION (Ask 'ZIP code or city (weather forecast)' (GetEnv LOCATION))
 
-# 3. Tesla BLE bridge (optional)
-Write-Host "`n-- Tesla Bluetooth bridge (M5Stack NanoC6 running esphome-tesla-ble) --"
-$tesla = (Ask 'Set up the Tesla bridge? (y/N)' $(if (GetEnv TESLA_BLE_HOST) { 'y' } else { 'n' })) -eq 'y'
+# 3. Optional features (all off unless you say yes)
+function YesNo($v) { if ($v -eq '1') { 'y' } else { 'n' } }
+Write-Host "`n-- Optional features --"
+Write-Host 'Full history keeps every per-second row forever (~20 GB/yr). Without it: last 26 h per second + minute averages forever.'
+SetEnv RECORD_HISTORY $(if ((Ask 'Keep full per-second history? (y/N)' (YesNo (GetEnv RECORD_HISTORY))) -eq 'y') { '1' } else { '0' })
+Write-Host 'Phone pushes use the free ntfy app (ntfy.sh). Without them, messages show on the dashboard only.'
+SetEnv NOTIFY $(if ((Ask 'Send push notifications to your phone? (y/N)' (YesNo (GetEnv NOTIFY))) -eq 'y') { '1' } else { '0' })
+
+# 4. Tesla BLE bridge (optional)
+Write-Host "`n-- Tesla control (optional) --"
+Write-Host 'Needs an M5Stack NanoC6 (~$10, https://shop.m5stack.com/products/m5stack-nanoc6-dev-kit) near where the car parks.'
+Write-Host 'Skip this if you only want Enphase monitoring.'
+$tesla = (Ask 'Set up Tesla control? (y/N)' $(if (GetEnv TESLA_BLE_HOST) { 'y' } else { 'n' })) -eq 'y'
 if ($tesla) {
   if (-not (GetEnv TESLA_BLE_USER)) { SetEnv TESLA_BLE_USER 'enphase' }
   if (-not (GetEnv TESLA_BLE_PASSWORD)) { SetEnv TESLA_BLE_PASSWORD (RandomToken) }
@@ -103,7 +113,7 @@ if ($tesla) {
   Write-Host 'Pairing: sit in the car, open http://<bridge-ip>/ (user/password from .env), press "Pair BLE Key", tap your key card on the console, confirm on the screen.'
 }
 
-# 4. Start
+# 5. Start
 Write-Host "`n-- Starting --"
 if ($Mode -eq 'docker') {
   docker compose up -d --build
@@ -113,5 +123,5 @@ if ($Mode -eq 'docker') {
   else { Write-Host 'Start it with: npm start' }
 }
 Write-Host "`nDashboard: http://localhost:$(if (GetEnv PORT) { GetEnv PORT } else { '8787' })"
-Write-Host 'Push notifications: install the ntfy app and subscribe to the topic shown on the EV tab.'
-Write-Host 'Keep this PC awake (Settings > System > Power > Sleep: Never) for per-second logging.'
+if ((GetEnv NOTIFY) -eq '1') { Write-Host 'Push notifications: install the ntfy app and subscribe to the topic shown on the EV tab.' }
+Write-Host 'Keep this PC awake (Settings > System > Power > Sleep: Never) for per-second monitoring.'
