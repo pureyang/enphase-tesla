@@ -2,7 +2,7 @@
 # Data (SQLite, tokens, reports) lives in ./data on the host, so it survives rebuilds and moves with the folder.
 # The container can't resolve envoy.local (no mDNS): set GATEWAY_HOST and TESLA_BLE_HOST to IPs in .env.
 services:
-  enphase-live:
+  solar-surplus-ev:
     build: .
     restart: unless-stopped
     env_file: .env

@@ -26,6 +26,10 @@ const controller = new Controller(collector, tesla, advisor);
 advisor.controller = controller;
 controller.start();
 
+// Per-microinverter 15-min energy: backfill from whatever raw reports exist, then keep it current.
+setTimeout(() => { try { store.syncInverter15m(0); } catch (e) { log.warn('array', e.message); } }, 15_000);
+setInterval(() => { try { store.syncInverter15m(Date.now() / 1000 - 3 * 3600); } catch (e) { log.warn('array', e.message); } }, 15 * 60_000);
+
 // Nightly report (capture rate, grid leakage, sessions) into data/reports/<day>.json at 23:55,
 // and on boot for yesterday if it was missed.
 function runReport(day) {
@@ -106,6 +110,14 @@ const routes = {
     sendJson(res, { latest: store.latestBatteryUnits(), series: store.batterySeries(from, to) });
   },
   '/api/inverters': (req, res) => sendJson(res, store.latestInverters()),
+  // Per-microinverter 15-min energy for one local day: ?day=YYYY-MM-DD
+  '/api/array': (req, res, q) => {
+    const [y, m, d] = String(q.get('day') || '').split('-').map(Number);
+    const a = y ? new Date(y, m - 1, d) : new Date(new Date().setHours(0, 0, 0, 0));
+    const b = new Date(a); b.setDate(b.getDate() + 1);
+    store.syncInverter15m(Math.max(a / 1000, Date.now() / 1000 - 2 * 86400));
+    sendJson(res, store.arrayDay(a / 1000, b / 1000));
+  },
   '/api/ev': (req, res) => sendJson(res, {
     ...(advisor.last || {}), state: advisor.state, control: controller.status, ntfy: config.ev.notify ? ntfyUrl() : null,
     notifications: store.recentNotifications(15), settings: config.ev && { ...config.ev, ntfyTopic: undefined },
@@ -122,7 +134,7 @@ const routes = {
   '/api/ev/test-notify': async (req, res) => {
     if (req.method !== 'POST') return sendJson(res, { error: 'POST only' }, 405);
     if (!config.ev.notify) return sendJson(res, { ok: false, error: 'Push notifications are off (NOTIFY=1 in .env)' });
-    const ok = await notify({ kind: 'TEST', title: 'Enphase Tesla test', body: 'EV charging notifications are working.', tags: ['white_check_mark'] });
+    const ok = await notify({ kind: 'TEST', title: 'Solar Surplus EV test', body: 'EV charging notifications are working.', tags: ['white_check_mark'] });
     sendJson(res, { ok });
   },
   // Grid leakage buckets (default hourly): ?from&to&res=60|3600|86400

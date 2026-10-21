@@ -59,6 +59,7 @@ export function enlightenHeaders(sessionId) {
 export async function getGatewaySerial() {
   if (config.gateway.serial) return config.gateway.serial;
   if (cache.gatewaySerial) return cache.gatewaySerial;
+  if (!config.enlighten.cloud) throw new Error('Set GATEWAY_SERIAL in .env (or ENLIGHTEN_CLOUD=1 to look it up)');
   const session = await getSession();
   const res = await fetch(`${config.enlighten.base}/app-api/${config.enlighten.siteId}/devices.json`, {
     headers: enlightenHeaders(session),
@@ -72,7 +73,8 @@ export async function getGatewaySerial() {
   return cache.gatewaySerial;
 }
 
-// Local gateway JWT. Prefers GATEWAY_TOKEN from .env, else mints via Entrez (valid ~1 year).
+// Local gateway JWT. Prefers GATEWAY_TOKEN from .env, else mints one the way Enphase's local API
+// tech brief describes: Enlighten login, then Entrez (valid ~1 year). Not part of ENLIGHTEN_CLOUD.
 export async function getGatewayToken({ force = false } = {}) {
   if (config.gateway.token && !force) return config.gateway.token;
   const c = cache.gateway;

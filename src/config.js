@@ -23,6 +23,9 @@ export const config = {
     email: env.ENLIGHTEN_EMAIL || '',
     password: env.ENLIGHTEN_PASSWORD || '',
     siteId: env.ENLIGHTEN_SITE_ID || '',
+    // Optional Enlighten cloud features (15-min history, live-stream fallback, serial lookup).
+    // These use Enlighten's web endpoints, which Enphase's Terms of Service may not allow. Off by default.
+    cloud: ['1', 'true', 'on'].includes(String(env.ENLIGHTEN_CLOUD ?? '').toLowerCase()),
   },
   ev: {
     location: env.LOCATION || '',

@@ -1,6 +1,6 @@
 # Tesla BLE bridge on an M5Stack NanoC6 (ESP32-C6), using yoziru/esphome-tesla-ble.
 # Reads the car's charging state/amps/kW over Bluetooth and exposes it on the LAN via
-# ESPHome's web server (REST + /events SSE), which Enphase Live subscribes to.
+# ESPHome's web server (REST + /events SSE), which Solar Surplus EV subscribes to.
 #
 # First flash over USB:   .venv-esphome/Scripts/esphome run esphome/tesla-ble.yaml --device COM3
 # Later updates over Wi-Fi: same command without --device.
@@ -20,6 +20,12 @@ packages:
   # To find a car's Bluetooth MAC (logged as "Found Tesla vehicle"), temporarily add:
   # listener: github://yoziru/esphome-tesla-ble/packages/listener.yml@v2026.10.2
 
+# Pair as a charging-only key. The package default (DRIVER) can also unlock the car, open the
+# trunk/frunk and windows; CHARGING_MANAGER can only start/stop charging, set amps and the charge
+# limit, and open the charge port. The car enforces this. Changing it needs a re-pair (README).
+tesla_ble_vehicle:
+  role: CHARGING_MANAGER
+
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
@@ -32,11 +38,11 @@ api:
     key: !secret api_encryption_key
   reboot_timeout: 0s
 
-# REST + Server-Sent Events for Enphase Live. Auth so other LAN devices can't change charging.
+# REST + Server-Sent Events for Solar Surplus EV. Auth so other LAN devices can't change charging.
 web_server:
   port: 80
   version: 3
   auth:
-    type: basic  # LAN only; Enphase Live sends it on each request
+    type: basic  # LAN only; Solar Surplus EV sends it on each request
     username: !secret web_username
     password: !secret web_password

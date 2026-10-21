@@ -1,4 +1,4 @@
-# Enphase Tesla installer (Windows).
+# Solar Surplus EV installer (Windows).
 #   powershell -ExecutionPolicy Bypass -File install.ps1            # asks Docker or Node
 #   powershell -ExecutionPolicy Bypass -File install.ps1 -Mode docker
 # Safe to re-run: keeps existing .env / esphome\secrets.yaml values unless you change them.
@@ -32,7 +32,7 @@ function SetEnv($key, $value) {
   Set-Content .env $lines -Encoding utf8
 }
 
-Write-Host "`n== Enphase Tesla setup ==`n"
+Write-Host "`n== Solar Surplus EV setup ==`n"
 
 # 1. How to run
 $hasDocker = [bool](Get-Command docker -ErrorAction SilentlyContinue)
@@ -55,8 +55,7 @@ SetEnv ENLIGHTEN_EMAIL (Ask 'Enlighten email' (GetEnv ENLIGHTEN_EMAIL))
 if (-not (GetEnv ENLIGHTEN_PASSWORD) -or (Ask 'Change Enlighten password? (y/N)' 'n') -eq 'y') {
   SetEnv ENLIGHTEN_PASSWORD (AskSecret 'Enlighten password')
 }
-SetEnv ENLIGHTEN_SITE_ID (Ask 'Enlighten site id (number in the Enlighten URL)' (GetEnv ENLIGHTEN_SITE_ID))
-SetEnv GATEWAY_SERIAL (Ask 'IQ Gateway serial (Enlighten > Devices > Gateway)' (GetEnv GATEWAY_SERIAL))
+SetEnv GATEWAY_SERIAL (Ask 'IQ Gateway serial (Enphase app > System > Devices > Gateway)' (GetEnv GATEWAY_SERIAL))
 $gw = GetEnv GATEWAY_HOST
 if ($gw -eq 'envoy.local' -or -not $gw) {
   try { $gw = ([Net.Dns]::GetHostAddresses('envoy.local') | Where-Object AddressFamily -eq 'InterNetwork' | Select-Object -First 1).IPAddressToString } catch {}
@@ -71,6 +70,11 @@ Write-Host 'Full history keeps every per-second row forever (~20 GB/yr). Without
 SetEnv RECORD_HISTORY $(if ((Ask 'Keep full per-second history? (y/N)' (YesNo (GetEnv RECORD_HISTORY))) -eq 'y') { '1' } else { '0' })
 Write-Host 'Phone pushes use the free ntfy app (ntfy.sh). Without them, messages show on the dashboard only.'
 SetEnv NOTIFY $(if ((Ask 'Send push notifications to your phone? (y/N)' (YesNo (GetEnv NOTIFY))) -eq 'y') { '1' } else { '0' })
+Write-Host 'Enlighten cloud features: 92 days of history (the EV advisor learns faster) and a cloud fallback if the gateway stops answering.'
+Write-Host 'They use Enlighten web endpoints that are not a published API; Enphase''s terms may not allow it. Default: off, gateway only.'
+$cloud = (Ask 'Use Enlighten cloud features? (y/N)' (YesNo (GetEnv ENLIGHTEN_CLOUD))) -eq 'y'
+SetEnv ENLIGHTEN_CLOUD $(if ($cloud) { '1' } else { '0' })
+if ($cloud) { SetEnv ENLIGHTEN_SITE_ID (Ask 'Enlighten site id (number in the Enlighten URL)' (GetEnv ENLIGHTEN_SITE_ID)) }
 
 # 4. Tesla BLE bridge (optional)
 Write-Host "`n-- Tesla control (optional) --"

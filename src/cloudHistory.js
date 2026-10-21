@@ -1,9 +1,9 @@
-// Pulls Enlighten's own 15-minute history (Wh per interval). This is what the EV advisor
+// Optional (ENLIGHTEN_CLOUD=1): pulls Enlighten's own 15-minute history (Wh per interval). This is what the EV advisor
 // learns from, and it covers time the per-second logger missed (e.g. laptop asleep).
 // GET /pv/systems/<site>/daily_energy?start_date=YYYY-MM-DD returns that date to month end.
 import { config } from './config.js';
 import { getSession, enlightenHeaders, hasCloudCreds } from './auth.js';
-import { db, writeCloudInterval } from './db.js';
+import { db, writeCloudInterval, syncLocalIntervals } from './db.js';
 import { log } from './log.js';
 
 const BACKFILL_DAYS = 92; // matches Open-Meteo's past_days limit used for training
@@ -65,6 +65,18 @@ export async function syncRecent() {
 }
 
 export function startCloudHistory() {
+  // Without ENLIGHTEN_CLOUD, build the same 15-min intervals from this logger's own minute rollups.
+  if (!config.enlighten.cloud) {
+    const local = (all) => {
+      try {
+        const n = syncLocalIntervals(all ? 0 : Math.floor(Date.now() / 1000) - 2 * 86400);
+        if (all) log.info('history', `15-min history from local data (${n} intervals); ENLIGHTEN_CLOUD=1 adds Enlighten's`);
+      } catch (e) { log.warn('history', e.message); }
+    };
+    setTimeout(() => local(true), 5_000);
+    setInterval(() => local(false), 15 * 60_000);
+    return;
+  }
   backfill().catch((e) => log.warn('history', e.message));
   setInterval(() => syncRecent().catch((e) => log.warn('history', e.message)), 15 * 60_000);
 }

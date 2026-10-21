@@ -1,5 +1,5 @@
 // Enlighten cloud live stream: the same feed the web "Live Status" panel uses.
-// Flow (recovered from Enlighten's web bundle):
+// Optional (ENLIGHTEN_CLOUD=1). Flow, as used by the Enlighten web app:
 //   GET /pv/aws_sigv4/livestream.json?serial_num=<gw>  -> AWS IoT custom-authorizer creds + topic,
 //   connect MQTT over wss://<aws_iot_endpoint>/mqtt with the creds packed into the username,
 //   subscribe to live_stream_topic, decode each payload as protobuf DataMsg (~1 msg/sec).
@@ -33,7 +33,7 @@ export class CloudSource extends EventEmitter {
     this.status = { state: 'idle', lastOk: 0, error: null, renewedAt: 0 };
   }
 
-  enabled() { return hasCloudCreds() && Boolean(config.enlighten.siteId); }
+  enabled() { return config.enlighten.cloud && hasCloudCreds() && Boolean(config.enlighten.siteId); }
 
   async start() {
     if (this.running || !this.enabled()) {

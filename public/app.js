@@ -124,7 +124,8 @@ function evOnGrid(t, samples, res) {
 
 // soc: overlay house-battery SOC on a right-hand 0-100% axis, so grid import can be read against charge level.
 // ev: add the car's charging power as its own trace, with start/stop markers from events().
-function powerChart(el, { sync, onZoom, bands, soc, ev, events } = {}) {
+// compare: add faded dashed Solar / Home / Grid traces for a comparison period (shifted onto this axis).
+function powerChart(el, { sync, onZoom, bands, soc, ev, events, compare } = {}) {
   const ax = axes((v) => fmtW(v, true));
   if (soc) ax.push({ scale: '%', side: 1, stroke: css('--soc'), grid: { show: false }, size: 52, values: (u, v) => v.map((x) => `${x}%`) });
   const opts = {
@@ -133,7 +134,11 @@ function powerChart(el, { sync, onZoom, bands, soc, ev, events } = {}) {
     scales: { x: { time: true }, ...(soc ? { '%': { range: [0, 100] } } : {}) },
     series: [{}, ...SERIES.map((s) => ({
       label: s.label, stroke: css(s.color), width: 1.5, value: (u, v) => fmtW(v, true), points: { show: false },
-    })), ...(ev ? [{ label: 'EV charging', stroke: css('--ev'), fill: css('--ev') + '33', width: 2, value: (u, v) => (v == null ? '–' : fmtW(v, true)), points: { show: false } }] : []), ...(soc ? [{ label: 'Battery SOC', scale: '%', stroke: css('--soc'), width: 2, dash: [6, 4], value: (u, v) => (v == null ? '–' : `${v.toFixed(0)}%`), points: { show: false } }] : [])],
+    })), ...(ev ? [{ label: 'EV charging', stroke: css('--ev'), fill: css('--ev') + '33', width: 2, value: (u, v) => (v == null ? '–' : fmtW(v, true)), points: { show: false } }] : []), ...(soc ? [{ label: 'Battery SOC', scale: '%', stroke: css('--soc'), width: 2, dash: [6, 4], value: (u, v) => (v == null ? '–' : `${v.toFixed(0)}%`), points: { show: false } }] : []),
+    ...(compare ? SERIES.slice(0, 3).map((s) => ({
+      label: `${s.label.replace(/ \(.*/, '')} (compare)`, stroke: css(s.color) + '99', width: 1.5, dash: [3, 3], show: false,
+      value: (u, v) => (v == null ? '–' : fmtW(v, true)), points: { show: false },
+    })) : [])],
     axes: ax,
     plugins: [...(bands ? [bandsPlugin(bands)] : []), ...(events ? [evMarkersPlugin(events)] : [])],
     hooks: onZoom ? { setSelect: [(u) => {
@@ -290,43 +295,212 @@ async function refreshToday() {
 }
 
 // ---------------------------------------------------------------- history
-const hist = { from: midnight(), to: nowSec(), stack: [], data: null, chart: null, soc: null };
+// A period (preset, stepped with ◀ ▶) holds a view (what the main chart shows, zoomed/panned inside it).
+// An optional comparison period is drawn shifted onto the same axis, and its totals sit next to the view's.
+const DAY = 86400;
+const dayStart = (t) => { const d = new Date(t * 1000); d.setHours(0, 0, 0, 0); return Math.floor(d / 1000); };
+const addDays = (t, n) => { const d = new Date(t * 1000); d.setDate(d.getDate() + n); return Math.floor(d / 1000); };
+const addMonths = (t, n) => { const d = new Date(t * 1000); d.setMonth(d.getMonth() + n); return Math.floor(d / 1000); };
+
+function makePeriod(p) {
+  const n = nowSec(), d0 = dayStart(n);
+  if (p === 'today') return { p, unit: 'day', a: d0, b: addDays(d0, 1) };
+  if (p === 'yesterday') return { p, unit: 'day', a: addDays(d0, -1), b: d0 };
+  if (p === 'week') { const a = addDays(d0, -((new Date(d0 * 1000).getDay() + 6) % 7)); return { p, unit: 'week', a, b: addDays(a, 7) }; }
+  if (p === 'month') { const d = new Date(n * 1000); const a = Math.floor(new Date(d.getFullYear(), d.getMonth(), 1) / 1000); return { p, unit: 'month', a, b: addMonths(a, 1) }; }
+  const len = { '6h': 6 * 3600, '24h': DAY, '7d': 7 * DAY, '30d': 30 * DAY }[p];
+  return { p, unit: 'roll', len, a: n - len, b: n };
+}
+function shiftPeriod(P, k) {
+  if (P.unit === 'day') return { ...P, a: addDays(P.a, k), b: addDays(P.b, k) };
+  if (P.unit === 'week') return { ...P, a: addDays(P.a, 7 * k), b: addDays(P.b, 7 * k) };
+  if (P.unit === 'month') return { ...P, a: addMonths(P.a, k), b: addMonths(P.b, k) };
+  return { ...P, a: P.a + k * P.len, b: P.b + k * P.len };
+}
+const fmtDay = (t, opts = {}) => new Date(t * 1000).toLocaleDateString([], { month: 'short', day: 'numeric', ...opts });
+function periodLabel(P) {
+  const n = nowSec();
+  if (P.unit === 'day') return P.a === dayStart(n) ? 'Today' : P.a === addDays(dayStart(n), -1) ? 'Yesterday' : fmtDay(P.a, { weekday: 'short' });
+  if (P.unit === 'week') return `Week of ${fmtDay(P.a)}`;
+  if (P.unit === 'month') return new Date(P.a * 1000).toLocaleDateString([], { month: 'long', year: 'numeric' });
+  if (P.p !== 'custom' && n - P.b < 120) return `Last ${P.p.replace('h', ' h').replace('d', ' days')}`;
+  return `${fmtDay(P.a)}, ${new Date(P.a * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} – ${fmtDay(P.b)}, ${new Date(P.b * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+}
+const periodEnd = (P) => Math.min(P.b, nowSec());
+
+const hist = { P: makePeriod('today'), from: 0, to: 0, stack: [], data: null, chart: null, soc: null, nav: null, navKey: '', cmp: '' };
+hist.from = hist.P.a; hist.to = periodEnd(hist.P);
 const toLocalInput = (s) => { const d = new Date(s * 1000); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 16); };
 const fromLocalInput = (v) => Math.floor(new Date(v) / 1000);
+
+// Seconds to subtract from the view to get the comparison window (null = compare off).
+function compareOffset() {
+  if (hist.cmp === 'prev') return hist.P.a - shiftPeriod(hist.P, -1).a;
+  if (hist.cmp === 'week') return hist.from - addDays(hist.from, -7);
+  if (hist.cmp === 'date' && $('cmpDate').value) {
+    const [y, m, d] = $('cmpDate').value.split('-').map(Number);
+    return dayStart(hist.P.a) - Math.floor(new Date(y, m - 1, d) / 1000);
+  }
+  return null;
+}
+const cmpLabel = (off) => (hist.cmp === 'prev' ? 'previous period' : hist.cmp === 'week' ? 'same time last week' : fmtDay(hist.P.a - off, { weekday: 'short' }));
+
+// Overview strip: the whole period at coarse resolution; the current view is highlighted, drag to pick a new one.
+function navChart(el) {
+  const u = new uPlot({
+    width: el.clientWidth, height: el.clientHeight,
+    legend: { show: false }, cursor: { drag: { x: true, y: false }, points: { show: false } },
+    scales: { x: { time: true } },
+    axes: [{ stroke: css('--muted'), grid: { show: false }, size: 28 }, { show: false }],
+    series: [{}, ...SERIES.slice(0, 3).map((s) => ({ stroke: css(s.color), width: 1, points: { show: false } }))],
+    hooks: {
+      draw: [(u) => {
+        const { ctx } = u; const { top, height } = u.bbox;
+        const x0 = u.valToPos(hist.from, 'x', true), x1 = u.valToPos(hist.to, 'x', true);
+        ctx.save(); ctx.fillStyle = css('--load') + '22'; ctx.strokeStyle = css('--load'); ctx.lineWidth = devicePixelRatio || 1;
+        ctx.fillRect(x0, top, Math.max(2, x1 - x0), height); ctx.strokeRect(x0, top, Math.max(2, x1 - x0), height); ctx.restore();
+      }],
+      setSelect: [(u) => {
+        if (u.select.width < 3) return;
+        const a = Math.floor(u.posToVal(u.select.left, 'x')), b = Math.ceil(u.posToVal(u.select.left + u.select.width, 'x'));
+        u.setSelect({ width: 0, height: 0 }, false);
+        setView(a, b);
+      }],
+    },
+  }, [[], [], [], []], el);
+  new ResizeObserver(() => u.setSize({ width: el.clientWidth, height: el.clientHeight })).observe(el);
+  return u;
+}
+
+function setView(a, b, push = true) {
+  const lo = hist.P.a, hi = periodEnd(hist.P);
+  const w = Math.min(b - a, hi - lo);
+  a = Math.max(lo, Math.min(a, hi - w));
+  if (push) hist.stack.push([hist.from, hist.to]);
+  hist.from = a; hist.to = a + w;
+  loadHistory();
+}
+function setPeriod(P) {
+  hist.P = P; hist.stack = [];
+  hist.from = P.a; hist.to = periodEnd(P);
+  loadHistory();
+}
+function pan(dir) {
+  const w = hist.to - hist.from;
+  if (w >= periodEnd(hist.P) - hist.P.a - 1) return stepPeriod(dir); // not zoomed: step the whole period
+  setView(hist.from + dir * Math.round(w / 2), hist.to + dir * Math.round(w / 2), false);
+}
+function stepPeriod(dir) {
+  const P = shiftPeriod(hist.P, dir);
+  if (P.a >= nowSec()) return;
+  setPeriod(P);
+}
+
+function histKpis(e, leak, c, cLeak, off) {
+  const self = (x) => (x.consumed ? 1 - (x.imported || 0) / x.consumed : null);
+  const selfUse = (x) => (x.produced ? 1 - (x.exported || 0) / x.produced : null);
+  const items = [
+    ['Produced', 'produced', fmtWh], ['Consumed', 'consumed', fmtWh], ['Imported', 'imported', fmtWh], ['Exported', 'exported', fmtWh],
+    ['Battery charged', 'charged', fmtWh], ['Battery discharged', 'discharged', fmtWh],
+    ['Import leakage', (x, l) => l, fmtWh], ['Self-sufficiency', self, pct], ['Solar self-use', selfUse, pct],
+  ];
+  const val = (x, l, k) => (typeof k === 'function' ? k(x, l) : x[k]);
+  $('rangeKpis').innerHTML = items.map(([label, k, f]) => {
+    const v = val(e, leak, k);
+    let sub = '';
+    if (c) {
+      const w = val(c, cLeak, k);
+      const delta = v != null && w ? (f === pct ? `${Math.round((v - w) * 100) >= 0 ? '+' : ''}${Math.round((v - w) * 100)} pts` : `${v >= w ? '+' : ''}${Math.round(((v - w) / w) * 100)}%`) : '';
+      sub = `<small class="muted">vs ${f(w)}${delta ? ` · ${delta}` : ''}</small>`;
+    }
+    return `<div class="kpi"><label>${label}</label><b>${f(v)}</b>${sub}</div>`;
+  }).join('') + `<div class="kpi"><label>1 s data coverage</label><b>${pct(e.coverage)}</b>${c ? `<small class="muted">vs ${pct(c.coverage)}</small>` : ''}</div>`;
+  $('cmpNote').textContent = c ? `· vs ${cmpLabel(off)}` : '';
+}
+const sumLeak = (rows) => rows.reduce((s, r) => s + (r.imp_wh || 0), 0);
 
 async function loadHistory() {
   if (!hist.chart) {
     hist.chart = powerChart($('histChart'), {
-      sync: 'hist', soc: true, ev: true, events: () => hist.evEvents, bands: () => (hist.data && hist.data.res > 1 ? hist.data : null),
-      onZoom: (a, b) => { hist.stack.push([hist.from, hist.to]); hist.from = a; hist.to = b; loadHistory(); },
+      sync: 'hist', soc: true, ev: true, compare: true, events: () => hist.evEvents, bands: () => (hist.data && hist.data.res > 1 ? hist.data : null),
+      onZoom: (a, b) => setView(a, b),
     });
     hist.soc = socChart($('histSoc'), { sync: 'hist' });
+    hist.nav = navChart($('histNav'));
   }
+  const P = hist.P, pEnd = periodEnd(P);
+  $('periodLabel').textContent = periodLabel(P);
+  $('nextP').disabled = P.b >= nowSec();
+  document.querySelectorAll('#presets button').forEach((x) => x.classList.toggle('on', x.dataset.p === P.p && P.a === makePeriod(P.p).a));
   $('from').value = toLocalInput(hist.from); $('to').value = toLocalInput(hist.to);
   $('csv').href = `/api/export.csv?from=${hist.from}&to=${hist.to}`;
-  const [d, e, car] = await Promise.all([
+  const zoomed = hist.to - hist.from < pEnd - P.a - 1;
+  $('fullP').disabled = !zoomed;
+
+  const off = compareOffset();
+  const [d, e, car, leak] = await Promise.all([
     getJSON(`/api/series?from=${hist.from}&to=${hist.to}`),
     getJSON(`/api/energy?from=${hist.from}&to=${hist.to}`),
     getJSON(`/api/tesla?from=${hist.from}&to=${hist.to}`).catch(() => ({ series: [], events: [] })),
+    getJSON(`/api/leakage?from=${hist.from}&to=${hist.to}&res=86400`).catch(() => []),
   ]);
+  let c = null, cLeak = null, cs = null;
+  if (off != null) {
+    const cf = hist.from - off, ct = hist.to - off;
+    [cs, c, cLeak] = await Promise.all([
+      getJSON(`/api/series?from=${cf}&to=${ct}&res=${d.res}`),
+      getJSON(`/api/energy?from=${cf}&to=${ct}`),
+      getJSON(`/api/leakage?from=${cf}&to=${ct}&res=86400`).then(sumLeak).catch(() => null),
+    ]);
+  }
+  // Comparison values on this view's time grid (same resolution, so buckets line up after the shift).
+  const onGrid = (k) => {
+    if (!cs) return d.t.map(() => null);
+    const m = new Map(cs.t.map((t, i) => [t + off, cs[k][i]]));
+    return d.t.map((t) => m.get(t) ?? null);
+  };
   hist.evEvents = evMarkers(car.events);
   hist.data = d;
   $('resNote').textContent = d.res === 1 ? `${d.t.length.toLocaleString()} points · 1 s` : `${d.t.length.toLocaleString()} buckets · ${d.res >= 3600 ? d.res / 3600 + ' h' : d.res / 60 + ' min'} avg (min/max shaded)`;
-  hist.chart.setData([d.t, d.pv, d.load, d.grid, d.batt, evOnGrid(d.t, car.series || [], d.res), d.soc]);
+  hist.chart.setData([d.t, d.pv, d.load, d.grid, d.batt, evOnGrid(d.t, car.series || [], d.res), d.soc, onGrid('pv'), onGrid('load'), onGrid('grid')]);
+  for (const i of [7, 8, 9]) hist.chart.setSeries(i, { show: off != null });
   hist.chart.setScale('x', { min: hist.from, max: hist.to });
   hist.soc.setData([d.t, d.soc]);
   hist.soc.setScale('x', { min: hist.from, max: hist.to });
-  kpis($('rangeKpis'), e);
+  histKpis(e, sumLeak(leak), c, cLeak, off);
+
+  // Overview: reload only when the period changes; always redraw the view box.
+  const key = `${P.a}-${pEnd}`;
+  if (hist.navKey !== key) {
+    hist.navKey = key;
+    const o = await getJSON(`/api/series?from=${P.a}&to=${pEnd}&res=${pEnd - P.a <= 2 * DAY ? 60 : pEnd - P.a <= 45 * DAY ? 900 : 3600}`);
+    hist.nav.setData([o.t, o.pv, o.load, o.grid]);
+    hist.nav.setScale('x', { min: P.a, max: pEnd });
+  } else hist.nav.redraw();
 }
 $('presets').addEventListener('click', (e) => {
   const b = e.target.closest('button'); if (!b) return;
-  document.querySelectorAll('#presets button').forEach((x) => x.classList.toggle('on', x === b));
-  const n = nowSec(), p = b.dataset.p;
-  hist.to = n; hist.stack = [];
-  hist.from = p === 'today' ? midnight() : n - { '1h': 3600, '6h': 21600, '24h': 86400, '7d': 604800, '30d': 2592000 }[p];
-  loadHistory();
+  setPeriod(makePeriod(b.dataset.p));
 });
-$('apply').onclick = () => { hist.stack.push([hist.from, hist.to]); hist.from = fromLocalInput($('from').value); hist.to = fromLocalInput($('to').value); loadHistory(); };
+$('prevP').onclick = () => stepPeriod(-1);
+$('nextP').onclick = () => stepPeriod(1);
+$('panL').onclick = () => pan(-1);
+$('panR').onclick = () => pan(1);
+$('fullP').onclick = () => setView(hist.P.a, periodEnd(hist.P));
+$('cmp').onchange = () => { hist.cmp = $('cmp').value; $('cmpDate').hidden = hist.cmp !== 'date'; if (hist.cmp !== 'date' || $('cmpDate').value) loadHistory(); };
+$('cmpDate').onchange = () => loadHistory();
+document.addEventListener('keydown', (e) => {
+  if (activeTab !== 'history' || /INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) return;
+  if (e.key === 'ArrowLeft') { e.preventDefault(); pan(-1); }
+  if (e.key === 'ArrowRight') { e.preventDefault(); pan(1); }
+});
+$('apply').onclick = () => {
+  const a = fromLocalInput($('from').value), b = fromLocalInput($('to').value);
+  if (!(b > a)) return;
+  hist.P = { p: 'custom', unit: 'roll', len: b - a, a, b }; hist.stack = [];
+  hist.from = a; hist.to = Math.min(b, nowSec());
+  loadHistory();
+};
 $('back').onclick = () => { const p = hist.stack.pop(); if (p) { [hist.from, hist.to] = p; loadHistory(); } };
 
 // ---------------------------------------------------------------- battery
@@ -395,16 +569,142 @@ async function loadGridTab() {
 }
 
 // ---------------------------------------------------------------- array
+// Microinverters stop reporting at dusk and the gateway keeps serving each one's last value,
+// so a report older than this is shown as asleep (0 W) instead of as current output.
+const INV_STALE_S = 20 * 60;
+const ymdLocal = (t) => { const d = new Date(t * 1000); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+const unitName = (s) => `…${String(s).slice(-6)}`;
+
 async function loadArray() {
   const inv = await getJSON('/api/inverters');
-  const total = inv.reduce((a, r) => a + (r.watts || 0), 0);
-  $('invNote').textContent = inv.length ? `· ${inv.length} units · ${fmtW(total)} · gateway updates these every ~5 min` : '';
+  const n = nowSec();
+  const awake = inv.filter((r) => n - r.ts <= INV_STALE_S);
+  const total = awake.reduce((a, r) => a + (r.watts || 0), 0);
+  $('invNote').textContent = inv.length
+    ? `· ${inv.length} units · ${fmtW(total)} · ${awake.length ? `${awake.length} reporting` : 'all asleep (no sun)'} · each unit reports every ~15 min`
+    : '';
   $('inv').innerHTML = inv.length ? inv.map((r) => {
-    const f = r.max_watts ? Math.min(1, r.watts / r.max_watts) : 0;
-    return `<div style="background:hsl(${40 + f * 10} ${30 + f * 70}% ${85 - f * 35}%)" title="${r.serial}\nmax ${r.max_watts} W\n${new Date(r.ts * 1000).toLocaleString()}">
-      <b>${r.watts} W</b><br>${String(r.serial).slice(-6)}</div>`;
+    const asleep = n - r.ts > INV_STALE_S;
+    const f = !asleep && r.max_watts ? Math.min(1, r.watts / r.max_watts) : 0;
+    const tip = `${r.serial}\nlast report ${r.watts} W at ${new Date(r.ts * 1000).toLocaleString()}\nmax ${r.max_watts} W`;
+    return `<div class="${asleep ? 'asleep' : ''}" style="background:hsl(${40 + f * 10} ${30 + f * 70}% ${85 - f * 35}%)" title="${tip}">
+      <b>${asleep ? 'asleep' : `${r.watts} W`}</b><br>${String(r.serial).slice(-6)}</div>`;
   }).join('') : '<span class="muted">Requires the local gateway connection.</span>';
+  if (!$('arrA').value) {
+    $('arrA').value = ymdLocal(n);
+    $('arrB').value = ymdLocal(addDays(dayStart(n), -1));
+  }
+  loadArrayCompare();
 }
+
+// ---- day comparison: per-panel 15-min output, as watts or as % of the array's average panel
+const arr = { mode: 'pct', sel: null, chart: null, data: null };
+
+function arrayDayView(d) {
+  const slots = 96, w = {};
+  for (const s of d.serials) {
+    w[s] = Array(slots).fill(null);
+    d.t.forEach((t, i) => { const k = Math.round((t - d.from) / d.bucket); if (k >= 0 && k < slots && d.wh[s][i] != null) w[s][k] = d.wh[s][i] * (3600 / d.bucket); });
+  }
+  // Array average per slot over panels that reported; % only when the average is meaningful (>= 20 W).
+  const avg = Array.from({ length: slots }, (_, k) => {
+    const v = d.serials.map((s) => w[s][k]).filter((x) => x != null);
+    return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
+  });
+  const pct = Object.fromEntries(d.serials.map((s) => [s, w[s].map((x, k) => (x != null && avg[k] >= 20 ? (x / avg[k]) * 100 : null))]));
+  const daily = Object.fromEntries(d.serials.map((s) => [s, w[s].reduce((a, x) => a + (x || 0), 0) * (d.bucket / 3600)]));
+  const vals = Object.values(daily).filter((x) => x > 0);
+  const mean = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
+  const slotsWithData = avg.filter((x) => x != null).length;
+  return { w, pct, daily, mean, total: vals.reduce((a, b) => a + b, 0), slotsWithData };
+}
+
+function drawArrayChart() {
+  const { A, B, serials, a0 } = arr.data;
+  const el = $('arrChart');
+  if (arr.chart) arr.chart.destroy();
+  const pctMode = arr.mode === 'pct';
+  const pick = (v, s) => (v ? (pctMode ? v.pct[s] : v.w[s]) : null) || Array(96).fill(null);
+  const t = Array.from({ length: 96 }, (_, k) => a0 + k * 900);
+  const series = [{}], data = [t];
+  serials.forEach((s, i) => {
+    const on = arr.sel == null || arr.sel === s;
+    series.push({ label: `${unitName(s)} · A`, stroke: arr.sel === s ? css('--pv') : `hsla(${(i * 47) % 360} 60% 50% / ${on ? 0.85 : 0.18})`, width: arr.sel === s ? 3 : 1.2, points: { show: false },
+      value: (u, v) => (v == null ? '–' : pctMode ? `${v.toFixed(0)}%` : fmtW(v)) });
+    data.push(pick(A, s));
+  });
+  if (arr.sel != null) {
+    series.push({ label: `${unitName(arr.sel)} · B`, stroke: css('--load'), width: 2.5, dash: [6, 4], points: { show: false },
+      value: (u, v) => (v == null ? '–' : pctMode ? `${v.toFixed(0)}%` : fmtW(v)) });
+    data.push(pick(B, arr.sel));
+  }
+  const ax = axes((v) => (pctMode ? `${v}%` : fmtW(v)));
+  arr.chart = new uPlot({
+    width: el.clientWidth, height: el.clientHeight - 40, legend: { show: false },
+    scales: { x: { time: true }, y: pctMode ? { range: [0, 150] } : {} },
+    cursor: { focus: { prox: 16 } }, focus: { alpha: 0.25 },
+    series, axes: ax,
+    hooks: {
+      setSeries: [(u, i) => { if (i != null && u.series[i]) $('arrNote').textContent = `· ${u.series[i].label}`; }],
+      ...(pctMode ? { drawAxes: [(u) => { // 100% reference line
+        const { ctx } = u, y = u.valToPos(100, 'y', true);
+        ctx.save(); ctx.strokeStyle = css('--muted'); ctx.setLineDash([4, 4]); ctx.beginPath();
+        ctx.moveTo(u.bbox.left, y); ctx.lineTo(u.bbox.left + u.bbox.width, y); ctx.stroke(); ctx.restore();
+      }] } : {}),
+    },
+  }, data, el);
+}
+
+function arrayTable() {
+  const { A, B, serials } = arr.data;
+  const pctOf = (v, s) => (v && v.mean ? (v.daily[s] / v.mean) * 100 : null);
+  const chg = (a, b) => (a != null && b ? ((a - b) / b) * 100 : null);
+  const cls = (x) => (x == null ? '' : x >= 0 ? 'up' : 'down');
+  const fmtPct = (x, sign = false) => (x == null ? '–' : `${sign && x >= 0 ? '+' : ''}${x.toFixed(0)}%`);
+  const rows = serials.map((s) => ({ s, a: A.daily[s] ?? null, b: B ? B.daily[s] ?? null : null, pa: pctOf(A, s), pb: pctOf(B, s) }))
+    .sort((x, y) => (x.pa ?? 999) - (y.pa ?? 999));
+  $('arrTable').innerHTML = `<thead><tr><th>Panel</th><th>Day A</th><th>Day B</th><th>Change</th><th>A, % of array avg</th><th>B, % of array avg</th><th>Shift</th></tr></thead><tbody>`
+    + rows.map((r) => `<tr data-s="${r.s}" class="${arr.sel === r.s ? 'sel' : ''}"><td title="${r.s}">${unitName(r.s)}</td>
+      <td>${fmtWh(r.a)}</td><td>${fmtWh(r.b)}</td><td class="${cls(chg(r.a, r.b))}">${fmtPct(chg(r.a, r.b), true)}</td>
+      <td><span class="bar" style="width:${Math.max(0, Math.min(100, ((r.pa ?? 0) - 50) * 1.2))}px"></span>${fmtPct(r.pa)}</td><td>${fmtPct(r.pb)}</td>
+      <td class="${cls(r.pa != null && r.pb != null ? r.pa - r.pb : null)}">${r.pa != null && r.pb != null ? `${r.pa - r.pb >= 0 ? '+' : ''}${(r.pa - r.pb).toFixed(0)} pts` : '–'}</td></tr>`).join('')
+    + `</tbody><tfoot><tr><th>Array</th><th>${fmtWh(A.total)}</th><th>${fmtWh(B && B.total)}</th><th class="${cls(chg(A.total, B && B.total))}">${fmtPct(chg(A.total, B && B.total), true)}</th><th>100%</th><th>100%</th><th></th></tr></tfoot>`;
+  const pa = rows.map((r) => r.pa).filter((x) => x != null);
+  const weakest = rows.find((r) => r.pa != null);
+  const items = [
+    ['Array, Day A', fmtWh(A.total)], ['Array, Day B', fmtWh(B && B.total)], ['Change', fmtPct(chg(A.total, B && B.total), true)],
+    ['Weakest panel (A)', weakest ? `${unitName(weakest.s)} · ${fmtPct(weakest.pa)}` : '–'],
+    ['Spread (A)', pa.length ? `${Math.min(...pa).toFixed(0)}–${Math.max(...pa).toFixed(0)}%` : '–'],
+    ['Panels under 90% (A)', String(pa.filter((x) => x < 90).length)],
+    ['Data (A / B)', `${A.slotsWithData} / ${B ? B.slotsWithData : 0} of 96 slots`],
+  ];
+  $('arrKpis').innerHTML = items.map(([l, v]) => `<div class="kpi"><label>${l}</label><b>${v}</b></div>`).join('');
+}
+
+async function loadArrayCompare() {
+  const [da, db] = await Promise.all([getJSON(`/api/array?day=${$('arrA').value}`), $('arrB').value ? getJSON(`/api/array?day=${$('arrB').value}`) : null]);
+  const serials = [...new Set([...da.serials, ...(db ? db.serials : [])])].sort();
+  arr.data = { A: arrayDayView(da), B: db ? arrayDayView(db) : null, serials, a0: da.from };
+  if (arr.sel && !serials.includes(arr.sel)) arr.sel = null;
+  $('arrNote').textContent = serials.length ? '' : '· no panel data for these days yet';
+  drawArrayChart();
+  arrayTable();
+}
+$('arrA').onchange = loadArrayCompare;
+$('arrB').onchange = loadArrayCompare;
+$('arrMode').addEventListener('click', (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  arr.mode = b.dataset.m;
+  document.querySelectorAll('#arrMode button').forEach((x) => x.classList.toggle('on', x === b));
+  if (arr.data) drawArrayChart();
+});
+$('arrAll').onclick = () => { arr.sel = null; if (arr.data) { drawArrayChart(); arrayTable(); } };
+$('arrTable').addEventListener('click', (e) => {
+  const tr = e.target.closest('tbody tr'); if (!tr) return;
+  arr.sel = arr.sel === tr.dataset.s ? null : tr.dataset.s;
+  drawArrayChart(); arrayTable();
+});
+new ResizeObserver(() => arr.chart && arr.chart.setSize({ width: $('arrChart').clientWidth, height: $('arrChart').clientHeight - 40 })).observe($('arrChart'));
 
 // ---------------------------------------------------------------- system
 async function loadSystem() {

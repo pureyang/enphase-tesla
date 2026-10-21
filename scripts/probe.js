@@ -17,7 +17,8 @@ const step = async (name, fn) => {
 
 if (hasCloudCreds()) {
   await step('Enlighten login', async () => { await getSession({ force: true }); });
-  await step('Gateway serial', async () => `…${(await getGatewaySerial()).slice(-4)}`);
+  if (config.gateway.serial || config.enlighten.cloud) await step('Gateway serial', async () => `…${(await getGatewaySerial()).slice(-4)}`);
+  else console.log('FAIL Gateway serial — set GATEWAY_SERIAL in .env');
 } else {
   console.log('SKIP Enlighten login — ENLIGHTEN_EMAIL / ENLIGHTEN_PASSWORD not set');
 }
@@ -40,7 +41,7 @@ if (config.gateway.host) {
   console.log('SKIP Gateway — GATEWAY_HOST not set');
 }
 
-if (hasCloudCreds()) {
+if (config.enlighten.cloud && hasCloudCreds()) {
   const cloud = new CloudSource();
   await step('Cloud live stream (waits up to 20 s for a frame)', () => new Promise((resolve, reject) => {
     const t = setTimeout(() => { cloud.stop(); reject(new Error(cloud.status.error || 'no frame in 20 s')); }, 20_000);

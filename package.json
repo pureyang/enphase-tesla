@@ -1,8 +1,8 @@
 {
-  "name": "enphase-tesla",
+  "name": "solar-surplus-ev",
   "version": "0.1.0",
   "private": true,
-  "description": "Per-second Enphase logger and dashboard that charges a Tesla from excess solar over local Bluetooth.",
+  "description": "Per-second monitoring for Enphase solar + battery systems from your own gateway; optional EV (Tesla) charging from surplus solar. Not affiliated with Enphase or Tesla.",
   "type": "module",
   "engines": {
     "node": ">=24"
@@ -19,6 +19,6 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/pureyang/enphase-tesla"
+    "url": "https://github.com/pureyang/solar-surplus-ev"
   }
 }

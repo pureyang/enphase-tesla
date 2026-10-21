@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Enphase Live</title>
+  <title>Solar Surplus EV</title>
   <link rel="stylesheet" href="/vendor/uPlot.min.css">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
   <header class="topbar">
-    <div class="brand"><span class="dot"></span> Enphase Live</div>
+    <div class="brand"><span class="dot"></span> Solar Surplus EV</div>
     <nav class="tabs" id="tabs">
       <button data-tab="live" class="on">Live</button>
       <button data-tab="ev">EV</button>
@@ -83,20 +83,30 @@
     <section class="panel" id="tab-history">
       <div class="toolbar">
         <div class="seg" id="presets">
-          <button data-p="1h">1h</button><button data-p="6h">6h</button><button data-p="today" class="on">Today</button>
-          <button data-p="24h">24h</button><button data-p="7d">7d</button><button data-p="30d">30d</button>
+          <button data-p="today" class="on">Today</button><button data-p="yesterday">Yesterday</button>
+          <button data-p="week">This week</button><button data-p="month">This month</button>
+          <button data-p="6h">6 h</button><button data-p="24h">24 h</button><button data-p="7d">7 days</button><button data-p="30d">30 days</button>
         </div>
+        <div class="seg period"><button id="prevP" title="Previous period">◀</button><b id="periodLabel"></b><button id="nextP" title="Next period">▶</button></div>
+        <label>Compare with <select id="cmp">
+          <option value="">Nothing</option><option value="prev">Previous period</option>
+          <option value="week">Same time last week</option><option value="date">A date…</option>
+        </select></label>
+        <input type="date" id="cmpDate" hidden>
+      </div>
+      <div class="toolbar">
+        <button id="panL" title="Pan left (← key)">◀ Pan</button><button id="panR" title="Pan right (→ key)">Pan ▶</button>
+        <button id="back" title="Undo zoom">↶ Zoom out</button><button id="fullP">Whole period</button>
         <label>From <input type="datetime-local" id="from"></label>
         <label>To <input type="datetime-local" id="to"></label>
         <button id="apply">Apply</button>
-        <button id="back" title="Undo zoom">↶ Zoom out</button>
         <span class="muted" id="resNote"></span>
         <a id="csv" class="btn" href="#">Export CSV (1 s)</a>
       </div>
-      <p class="hint">Drag across a chart to zoom. Spans ≤ 6 h load every second; longer spans load averaged buckets with min/max.</p>
-      <div class="card"><h3>Power</h3><div id="histChart" class="chart tall"></div></div>
+      <p class="hint">Drag across the chart, or across the overview strip under it, to zoom in. ◀ ▶ (or ← →) pan when zoomed and step to the previous/next period when not. Spans ≤ 6 h load every second.</p>
+      <div class="card"><h3>Power</h3><div id="histChart" class="chart tall"></div><div id="histNav" class="nav"></div></div>
       <div class="card"><h3>Battery state of charge</h3><div id="histSoc" class="chart small"></div></div>
-      <div class="card"><h3>Energy in range</h3><div class="kpis" id="rangeKpis"></div></div>
+      <div class="card"><h3>Energy in view <span class="muted" id="cmpNote"></span></h3><div class="kpis" id="rangeKpis"></div></div>
     </section>
 
     <section class="panel" id="tab-battery">
@@ -113,6 +123,19 @@
 
     <section class="panel" id="tab-array">
       <div class="card"><h3>Microinverters <span class="muted" id="invNote"></span></h3><div class="inv" id="inv"></div></div>
+      <div class="card">
+        <h3>Compare days <span class="muted" id="arrNote"></span></h3>
+        <div class="toolbar">
+          <label>Day A <input type="date" id="arrA"></label>
+          <label>Day B <input type="date" id="arrB"></label>
+          <div class="seg" id="arrMode"><button data-m="pct" class="on">% of array average</button><button data-m="w">Watts</button></div>
+          <button id="arrAll">Show all panels</button>
+        </div>
+        <p class="hint">Each line is one panel's 15-min output. In % mode, 100% = the array's average panel at that moment, so shading and weak panels stand out. Click a row to highlight that panel: Day A solid, Day B dashed.</p>
+        <div id="arrChart" class="chart tall"></div>
+        <div class="kpis" id="arrKpis"></div>
+        <div class="tablewrap"><table class="arr" id="arrTable"></table></div>
+      </div>
     </section>
 
     <section class="panel" id="tab-system">

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Enphase Tesla installer (Linux / macOS / Raspberry Pi).
+# Solar Surplus EV installer (Linux / macOS / Raspberry Pi).
 #   ./install.sh            # asks docker or node
 #   ./install.sh docker
 # Safe to re-run: keeps existing .env / esphome/secrets.yaml values unless you change them.
@@ -16,7 +16,7 @@ set_env() {
   else echo "$k=$v" >> .env; rm -f "$tmp"; fi
 }
 
-echo; echo "== Enphase Tesla setup =="; echo
+echo; echo "== Solar Surplus EV setup =="; echo
 
 mode="${1:-}"
 if [ -z "$mode" ]; then mode=$(ask "Run with docker or node?" "$(command -v docker >/dev/null && echo docker || echo node)"); fi
@@ -34,8 +34,7 @@ set_env ENLIGHTEN_EMAIL "$(ask 'Enlighten email' "$(get_env ENLIGHTEN_EMAIL)")"
 if [ -z "$(get_env ENLIGHTEN_PASSWORD)" ] || [ "$(ask 'Change Enlighten password? (y/N)' n)" = y ]; then
   set_env ENLIGHTEN_PASSWORD "$(ask_secret 'Enlighten password')"
 fi
-set_env ENLIGHTEN_SITE_ID "$(ask 'Enlighten site id (number in the Enlighten URL)' "$(get_env ENLIGHTEN_SITE_ID)")"
-set_env GATEWAY_SERIAL "$(ask 'IQ Gateway serial (Enlighten > Devices > Gateway)' "$(get_env GATEWAY_SERIAL)")"
+set_env GATEWAY_SERIAL "$(ask 'IQ Gateway serial (Enphase app > System > Devices > Gateway)' "$(get_env GATEWAY_SERIAL)")"
 gw=$(get_env GATEWAY_HOST)
 if [ -z "$gw" ] || [ "$gw" = envoy.local ]; then
   gw=$( (getent hosts envoy.local 2>/dev/null || dscacheutil -q host -a name envoy.local 2>/dev/null) | grep -oE '([0-9]+\.){3}[0-9]+' | head -1 || true)
@@ -49,6 +48,12 @@ echo "Full history keeps every per-second row forever (~20 GB/yr). Without it: l
 set_env RECORD_HISTORY "$([ "$(ask 'Keep full per-second history? (y/N)' "$(yn "$(get_env RECORD_HISTORY)")")" = y ] && echo 1 || echo 0)"
 echo "Phone pushes use the free ntfy app (ntfy.sh). Without them, messages show on the dashboard only."
 set_env NOTIFY "$([ "$(ask 'Send push notifications to your phone? (y/N)' "$(yn "$(get_env NOTIFY)")")" = y ] && echo 1 || echo 0)"
+echo "Enlighten cloud features: 92 days of history (the EV advisor learns faster) and a cloud fallback if the gateway stops answering."
+echo "They use Enlighten web endpoints that are not a published API; Enphase's terms may not allow it. Default: off, gateway only."
+set_env ENLIGHTEN_CLOUD "$([ "$(ask 'Use Enlighten cloud features? (y/N)' "$(yn "$(get_env ENLIGHTEN_CLOUD)")")" = y ] && echo 1 || echo 0)"
+if [ "$(get_env ENLIGHTEN_CLOUD)" = 1 ]; then
+  set_env ENLIGHTEN_SITE_ID "$(ask 'Enlighten site id (number in the Enlighten URL)' "$(get_env ENLIGHTEN_SITE_ID)")"
+fi
 
 echo; echo "-- Tesla control (optional) --"
 echo 'Needs an M5Stack NanoC6 (~$10, https://shop.m5stack.com/products/m5stack-nanoc6-dev-kit) near where the car parks.'

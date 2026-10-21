@@ -8,6 +8,10 @@
 // Smoothing: during a short dip the car holds at min amps on a small loan from the house battery
 // (EV_LOAN_WH a day, repaid from solar before the car gets more), and a plan that only pushes the
 // window back by <= STICKY_S doesn't stop a running session. State survives restarts (ev_state.json).
+// Fewer start/stops: on cloudy days a start needs CLOUDY_START_TICKS good minutes and a planned session
+// of at least MIN_SESSION_WH / MIN_SESSION_S; after we stop, no restart for REST_S unless the house is
+// exporting enough for min amps REST_EXPORT_TICKS minutes running; amps follow a 3-tick average and
+// only change by AMPS_STEP or more (cuts for grid import and raises into clear export apply at once).
 import { config } from './config.js';
 import { db, writeNotification } from './db.js';
 import { notify } from './notify.js';
@@ -22,6 +26,13 @@ const CAR_CHARGE_EFF = 0.9; // wall -> pack
 const REPAY_W = 500;       // while the loan is open, this much of the excess goes to the house battery first
 const STICKY_S = 3600;     // keep charging if the plan's next window starts within this
 const PLAN_MAX_AGE_S = 900; // a saved plan is used after a restart until the advisor has a fresh one
+const CLOUDY_RATIO = 0.8;  // solar this far below the model's expectation counts as cloudy...
+const CLOUDY_COVER = 70;   // ...as does forecast cloud cover (%) for this hour
+const CLOUDY_START_TICKS = 5;
+const MIN_SESSION_WH = 1000, MIN_SESSION_S = 1800; // cloudy-day start needs this much planned charging left
+const REST_S = 20 * 60;    // after our own stop, wait this long before starting again...
+const REST_EXPORT_TICKS = 5; // ...unless exporting >= min amps + margin this many ticks in a row
+const SMOOTH_TICKS = 3, AMPS_STEP = 2;
 
 export class Controller {
   constructor(collector, tesla, advisor) {
@@ -34,6 +45,9 @@ export class Controller {
     this.pausedUntil = saved.pausedUntil ?? 0;
     this.loan = saved.loan ?? { day: null, wh: 0 }; // Wh the car borrowed from the house battery today
     this.wasCharging = saved.wasCharging ?? null;
+    this.restUntil = saved.restUntil ?? 0;   // no restart before this (set when we stop a session)
+    this.exportTicks = 0;
+    this.targets = [];                        // recent target amps while charging, for smoothing
     this.lastTick = 0;
     this.startCount = 0;
     this.stopCount = 0;
@@ -57,7 +71,7 @@ export class Controller {
   }
 
   persist() {
-    this.advisor.state.control = { expect: this.expect, ownSession: this.ownSession, pausedUntil: this.pausedUntil, loan: this.loan, wasCharging: this.wasCharging };
+    this.advisor.state.control = { expect: this.expect, ownSession: this.ownSession, pausedUntil: this.pausedUntil, loan: this.loan, wasCharging: this.wasCharging, restUntil: this.restUntil };
     this.advisor.save();
   }
 
@@ -148,6 +162,7 @@ export class Controller {
     let next = Math.min(config.ev.maxAmps, Math.floor(targetW / volts));
     if (next < config.ev.minAmps) next = 0;
     const info = { mode, excessW, exportW, importW, soc: r.soc, targetW, loanWh: this.loan.wh };
+    const cloudy = this.cloudy(now, plan);
     // Dip, not a plan change: hold at min amps while the loan has room (or solar still covers min amps).
     const minW = config.ev.minAmps * volts;
     if (car.charging && next === 0 && !planSaysNo && r.pv >= DAYLIGHT_W
@@ -157,15 +172,55 @@ export class Controller {
     }
 
     if (!car.charging) {
+      this.targets = [];
+      this.exportTicks = exportW >= minW + MARGIN_W ? this.exportTicks + 1 : 0;
       this.startCount = next > 0 ? this.startCount + 1 : 0;
-      if (next > 0 && this.startCount >= START_TICKS) return this.command(now, car, next, `${mode}: ${(excessW / 1000).toFixed(1)} kW excess`, info);
+      const why = `${mode}: ${(excessW / 1000).toFixed(1)} kW excess`;
+      // Resting after our last stop: only real, sustained export ends the rest early.
+      if (now < this.restUntil && this.exportTicks < REST_EXPORT_TICKS) {
+        return set(`Resting after last stop until ${clock(this.restUntil)}`, round(info));
+      }
+      if (next > 0 && cloudy) {
+        const left = this.plannedLeft(now, plan);
+        if (mode.startsWith('plan') && (left.wh < MIN_SESSION_WH || left.s < MIN_SESSION_S)) {
+          return set(`Cloudy: plan has only ${(left.wh / 1000).toFixed(1)} kWh / ${Math.round(left.s / 60)} min left, not starting`, round(info));
+        }
+        if (this.startCount < CLOUDY_START_TICKS) return set(`Cloudy: ${this.startCount}/${CLOUDY_START_TICKS} good minutes before starting`, round(info));
+        return this.command(now, car, next, `${why} (cloudy, ${CLOUDY_START_TICKS} min steady)`, info);
+      }
+      if (next > 0 && this.startCount >= START_TICKS) return this.command(now, car, next, why, info);
     } else {
       this.stopCount = next === 0 ? this.stopCount + 1 : 0;
       if (next === 0 && this.stopCount >= STOP_TICKS) return this.command(now, car, 0, `${mode}: excess ${(excessW / 1000).toFixed(1)} kW is below ${config.ev.minAmps} A`, info);
-      if (next > 0 && next !== amps) return this.command(now, car, next, `${mode}: ${(excessW / 1000).toFixed(1)} kW excess`, info);
+      if (next > 0) {
+        // Steadier amps: follow the recent average and ignore 1 A wiggles. Cutting for grid import is immediate.
+        this.targets = [...this.targets, next].slice(-SMOOTH_TICKS);
+        const avg = Math.floor(this.targets.reduce((a, b) => a + b, 0) / this.targets.length);
+        const smooth = Math.max(config.ev.minAmps, Math.min(config.ev.maxAmps, avg));
+        // Immediate: cut when importing (priority 2), raise when clearly exporting (priority 1).
+        const urgent = (importW > MARGIN_W && next < amps) || (exportW > AMPS_STEP * volts + MARGIN_W && next > amps);
+        const want = urgent ? next : Math.abs(smooth - amps) >= AMPS_STEP ? smooth : amps;
+        if (want !== amps) return this.command(now, car, want, `${mode}: ${(excessW / 1000).toFixed(1)} kW excess${want === next ? '' : ' (3-min average)'}`, info);
+      }
     }
     set(car.charging ? `Holding ${amps} A` : 'Waiting for excess solar', round(info));
     this.status.active = true;
+  }
+
+  // Cloudy = solar running well below what the model expected, or heavy forecast cloud this hour.
+  cloudy(now, plan) {
+    const ratio = this.advisor.last && this.advisor.last.plan && this.advisor.last.plan.nowcastRatio;
+    if (ratio != null && ratio < CLOUDY_RATIO) return true;
+    const w = db.prepare('SELECT cloud FROM weather_hourly WHERE ts = ?').get(Math.floor(now / 3600) * 3600);
+    return Boolean(w && w.cloud >= CLOUDY_COVER);
+  }
+
+  // Energy and time left in the plan's current/next window.
+  plannedLeft(now, plan) {
+    const b = plan && plan.best;
+    if (!b || b.endTs <= now) return { wh: 0, s: 0 };
+    const s = b.endTs - Math.max(now, b.startTs);
+    return { wh: (b.watts * s) / 3600, s };
   }
 
   // A sleeping car drops settings, so wake it and wait (up to 45 s) before sending any.
@@ -193,6 +248,8 @@ export class Controller {
       log.warn('control', `${kind} ${amps} A failed: ${e.message}`);
     }
     this.startCount = this.stopCount = 0;
+    this.targets = amps > 0 ? [amps] : [];
+    if (ok && kind === 'STOP') { this.restUntil = now + REST_S; this.exportTicks = 0; }
     if (ok) {
       this.expect = { charging: amps > 0, amps, ts: now };
       if (kind === 'START') this.ownSession = true;
@@ -275,4 +332,5 @@ export class Controller {
   }
 }
 
+const clock = (ts) => new Date(ts * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 const round = (o) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, typeof v === 'number' ? Math.round(v) : v]));

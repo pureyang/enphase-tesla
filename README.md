@@ -1,8 +1,11 @@
-# Enphase Tesla
+# Solar Surplus EV
 
 Per-second monitoring for an Enphase solar + battery system, from your IQ Gateway on your own
 network. Optionally, charge a Tesla from **excess solar only** with a $10 Bluetooth board. No Tesla
 API, no cloud subscriptions.
+
+**Independent open-source project. Not affiliated with, endorsed by or supported by Enphase Energy
+or Tesla.** Read [Safety, liability and trademarks](#safety-liability-and-trademarks) before you use it.
 
 **Core (everything you need is an Enphase system and a computer):**
 
@@ -21,16 +24,32 @@ API, no cloud subscriptions.
 | Full per-second history (every second, forever) | `RECORD_HISTORY=1` | ~20 GB of disk a year |
 | Phone push notifications | `NOTIFY=1` | Free [ntfy](https://ntfy.sh) app |
 | Automatic Tesla charging over Bluetooth | Installer's Tesla step | [M5Stack NanoC6](https://shop.m5stack.com/products/m5stack-nanoc6-dev-kit) (~$10) |
+| Enlighten cloud features (see below) | `ENLIGHTEN_CLOUD=1` | Your Enlighten login and site id |
 
 The NanoC6 is only needed for Tesla control. Without it, everything else works.
 
-Not affiliated with Enphase or Tesla. Tesla control sends real charge commands to your car; use at your own risk.
+### Enlighten cloud features (optional)
+
+By default everything comes from your own gateway on your own network. The only Enphase cloud call
+is getting a local gateway token about once a year, the way Enphase's local API tech brief
+describes (or paste `GATEWAY_TOKEN` yourself and skip even that).
+
+`ENLIGHTEN_CLOUD=1` adds three things from Enlighten's web endpoints:
+
+- **15-min history**, up to 92 days back. The EV advisor learns your solar and load from day one
+  instead of only from what this app has logged, and gaps (computer asleep) are filled in.
+- **Live-stream fallback**: if the gateway stops answering, the dashboard keeps updating from the
+  cloud feed the Enlighten app uses.
+- **Gateway serial lookup**, so you don't have to type it.
+
+These are not a published API. Enphase's Terms of Service restrict automated access to its
+websites, so turning this on is your decision and may put your Enlighten account at risk.
 
 ## What you need
 
 | Item | Notes |
 | --- | --- |
-| Enphase IQ Gateway with consumption CTs | Local API needs your Enlighten login (a gateway token is minted automatically) |
+| Enphase IQ Gateway with consumption CTs | Your Enlighten login, to get a local gateway token once a year (or paste a token) |
 | Always-on computer on the same network | Windows, macOS, Linux or Raspberry Pi. Node 24+ or Docker |
 | *Tesla control only:* [M5Stack NanoC6](https://shop.m5stack.com/products/m5stack-nanoc6-dev-kit) | ~$10, USB powered, within Bluetooth range of where the car parks, plus a USB-C data cable to flash it |
 | *Tesla control only:* a Tesla on a charger it controls | Tested: Model 3 on a Mobile Connector, 240 V, 5–32 A |
@@ -39,8 +58,8 @@ Not affiliated with Enphase or Tesla. Tesla control sends real charge commands t
 
 1. Get the code:
    ```
-   git clone https://github.com/pureyang/enphase-tesla.git
-   cd enphase-tesla
+   git clone https://github.com/pureyang/solar-surplus-ev.git
+   cd solar-surplus-ev
    ```
 2. Run the installer:
    - **Windows**: `powershell -ExecutionPolicy Bypass -File install.ps1`
@@ -50,8 +69,9 @@ Not affiliated with Enphase or Tesla. Tesla control sends real charge commands t
 The installer asks, in order:
 
 1. **Docker or Node**, and checks it's installed.
-2. **Enphase**: Enlighten email and password, site id, gateway serial and IP, ZIP code (for the forecast).
-3. **Full per-second history?** Default no.
+2. **Enphase**: Enlighten email and password, gateway serial and IP, ZIP code (for the forecast).
+3. **Full per-second history?** Default no. **Enlighten cloud features?** Default no; if yes, it
+   also asks for your site id.
 4. **Phone push notifications?** Default no. If yes, install the ntfy app and subscribe to the topic
    shown on the EV tab.
 5. **Tesla control?** Default no. Answer yes only if you have a NanoC6. It writes
@@ -77,6 +97,7 @@ restart the `EnphaseLive` scheduled task on Windows).
 
 - `RECORD_HISTORY=1`: keeps every second from now on. Seconds already pruned don't come back.
 - `NOTIFY=1`: the EV tab then shows your topic and a **Send test** button.
+- `ENLIGHTEN_CLOUD=1`: also set `ENLIGHTEN_SITE_ID`. History backfills within a minute of restart.
 - Tesla: re-run the installer and answer yes at the Tesla step.
 
 ## Pairing the car
@@ -91,6 +112,16 @@ Only for Tesla control. You need the NanoC6 flashed by the installer.
 4. Sit in the car, open `http://<bridge-ip>/` (user/password from `.env`), press **Pair BLE Key**,
    tap your key card on the console and confirm on the car screen.
 5. The EV tab now shows the car's real amps, battery % and charge limit.
+
+The bridge pairs as a **charging-only key** (`role: CHARGING_MANAGER` in `esphome/tesla-ble.yaml`).
+The car only lets it start/stop charging, set amps and the charge limit, and open the charge port.
+It can't unlock the car or open the trunk, even if someone gets onto the bridge's web page.
+
+**Paired before this setting existed?** Your key is a full DRIVER key. To swap it:
+
+1. Flash the updated firmware over Wi-Fi: `esphome run esphome/tesla-ble.yaml`.
+2. In the car, open **Controls > Locks** and delete the old key for the bridge.
+3. Pair again (step 4 above).
 
 ## How the car control works
 
@@ -108,6 +139,12 @@ Every `EV_CONTROL_INTERVAL_S` (default 60 s), `src/controller.js` sets the car's
   house battery (up to `EV_LOAN_WH`, default 200 Wh/day) instead of stopping; the loan is repaid from
   solar before the car gets more. It stops ~3 min after the loan runs out.
 - A plan that only moves the car's window back by an hour or less doesn't stop a running session.
+- **Cloudy days** (solar 20%+ below forecast, or 70%+ cloud cover this hour): a start needs 5 good
+  minutes instead of 2, and at least 1 kWh / 30 min of planned charging left.
+- **After each stop** it rests 20 min before starting again, unless the house exports enough for
+  min amps 5 minutes in a row.
+- **Steadier amps**: amps follow a 3-minute average and only change by 2 A or more. Cuts for grid
+  import, and raises when clearly exporting, still happen at once.
 - When the house battery is full and the car reaches its own charge limit, the limit is raised to
   `EV_LIMIT_RAISE_TO` (default 90%) so solar goes to the car instead of the grid, then put back after sunset.
 - Session, loan and plan are saved in `data/ev_state.json`, so a restart doesn't reset them.
@@ -124,6 +161,9 @@ Every `EV_CONTROL_INTERVAL_S` (default 60 s), `src/controller.js` sets the car's
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `GATEWAY_HOST` | `envoy.local` | Gateway IP (use an IP under Docker) |
+| `GATEWAY_SERIAL` | | Gateway serial (required unless `ENLIGHTEN_CLOUD=1`) |
+| `GATEWAY_TOKEN` | | Optional: paste a token from entrez.enphaseenergy.com instead of using your login |
+| `ENLIGHTEN_CLOUD` | 0 | 1 = Enlighten history, cloud fallback and serial lookup (see above) |
 | `RECORD_HISTORY` | 0 | 1 = keep every per-second row forever (~20 GB/yr) |
 | `HISTORY_HOURS` | 26 | Per-second rows kept when `RECORD_HISTORY=0` (min 26) |
 | `NOTIFY` | 0 | 1 = push messages to your phone via ntfy |
@@ -146,28 +186,18 @@ Every `EV_CONTROL_INTERVAL_S` (default 60 s), `src/controller.js` sets the car's
 | Source | Rate | How |
 | --- | --- | --- |
 | Local IQ Gateway (preferred) | 1 s | `GET /ivp/livedata/status` (stream enabled via `POST /ivp/livedata/stream`), `GET /ivp/meters/readings` |
-| Enlighten cloud live stream (fallback) | 1 s | Same feed as Enlighten's "Live Status" panel, see below |
+| Enlighten cloud live stream (fallback, `ENLIGHTEN_CLOUD=1` only) | 1 s | Same feed as the Enlighten app's live view |
 | Gateway battery inventory | 30 s | `GET /ivp/ensemble/inventory` (per-unit SOC, temperature) |
 | Gateway microinverters | 5 min | `GET /api/v1/production/inverters` |
-| Enlighten history | 15 min | `GET /pv/systems/<site>/today` |
+| 15-min history | 15 min | Built from this app's own minute data; with `ENLIGHTEN_CLOUD=1`, Enlighten's history |
 | Open-Meteo | hourly | Solar radiation and cloud forecast |
 | Tesla BLE bridge | ~10 s | ESPHome web_server `/events` (SSE); commands via its REST API |
 
 The collector writes exactly one row per second from whichever source is healthy. If local data is
-older than `FALLBACK_AFTER_S` (10 s) it starts the cloud stream, and puts it back on standby once
-local has been healthy for 2 min.
+older than `FALLBACK_AFTER_S` (10 s) and `ENLIGHTEN_CLOUD=1`, it starts the cloud stream, and puts
+it back on standby once local has been healthy for 2 min.
 
 Signs follow Enphase: battery **+ = discharging**, grid **+ = importing**.
-
-### Enlighten live stream (recovered from the web bundle)
-
-1. `GET /pv/aws_sigv4/livestream.json?serial_num=<gateway>` with header `e-auth-token: <session>`
-   returns `aws_iot_endpoint`, `aws_authorizer`, `aws_token_key/value`, `aws_digest`,
-   `live_stream_topic`, `live_stream_duration` (900 s).
-2. MQTT 3.1.1 over `wss://<aws_iot_endpoint>/mqtt`. Username is the query string
-   `?x-amz-customauthorizer-name=…&<token_key>=…&site-id=…&x-amz-customauthorizer-signature=…&evse-count=0&env=prod`.
-3. Subscribe to `live_stream_topic`. Each message (~1/s) is protobuf `DataMsg` (`proto/DataMsg.proto`).
-4. Renew before `live_stream_duration` runs out.
 
 ## Storage (`data/enphase.db`, SQLite)
 
@@ -192,6 +222,29 @@ docker compose --profile esphome up -d       # optional ESPHome dashboard (OTA u
 Uses `.env` and keeps the database in `./data`. Containers can't resolve `envoy.local`, so set
 `GATEWAY_HOST` and `TESLA_BLE_HOST` to IP addresses. Run only one copy (Docker **or** Node): two
 copies would both send commands to the car.
+
+## Safety, liability and trademarks
+
+- **No warranty.** This software is provided "as is" under the MIT license, without warranty of
+  any kind. You use it at your own risk. The authors are not liable for any damage, loss or cost
+  that results from using it.
+- **It acts on real equipment.** With Tesla control on, it starts and stops your car's charging,
+  sets the charging amps and can raise the car's charge limit. Make sure your charger, circuit and
+  wiring are rated for the amps you allow (`EV_MAX_AMPS`). The car and charger enforce their own
+  limits, but you are responsible for your equipment.
+- **Advice and estimates can be wrong.** Forecasts, plans, expected battery % and energy figures
+  are estimates. Don't rely on them for safety, backup power or billing decisions.
+- **Your accounts, your terms.** You are responsible for following Enphase's and Tesla's terms
+  for your own accounts and devices. The optional `ENLIGHTEN_CLOUD` features use Enlighten's web
+  endpoints, which those terms may not allow.
+- **Your data stays with you.** Credentials live in `.env` on your computer. The dashboard only
+  listens on this computer by default (`HOST=127.0.0.1`). With `NOTIFY=1`, push messages go
+  through ntfy.sh.
+- **Trademarks.** Enphase, Enlighten and IQ are trademarks of Enphase Energy, Inc. Tesla is a
+  trademark of Tesla, Inc. They are used only to describe what this software works with.
+- **Firmware license.** The Tesla Bluetooth firmware
+  ([yoziru/esphome-tesla-ble](https://github.com/yoziru/esphome-tesla-ble)) is AGPL-3.0. This repo
+  only references it; your build downloads it.
 
 ## Credits
 

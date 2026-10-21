@@ -75,6 +75,13 @@ CREATE TABLE IF NOT EXISTS leakage_1m (
   load_wh REAL, batt_wh REAL, pv_wh REAL, soc REAL
 );
 
+-- Per-microinverter energy per 15 min, built from the gateway's ~15-min reports. Kept forever (small),
+-- so day-to-day array comparisons work after per-second data is pruned.
+CREATE TABLE IF NOT EXISTS inverter_15m (
+  ts INTEGER NOT NULL, serial TEXT NOT NULL, wh REAL,
+  PRIMARY KEY (ts, serial)
+) WITHOUT ROWID;
+
 CREATE TABLE IF NOT EXISTS ev_samples (
   ts INTEGER PRIMARY KEY,          -- unix seconds, every 10 s while the Tesla BLE bridge is online
   charging INTEGER, state TEXT,
@@ -204,10 +211,22 @@ export function catchUpRollups() {
   leakageSql.run(Math.floor((lastLeak ?? first) / 60) * 60, Math.floor(Date.now() / 60000) * 60);
 }
 
+// 15-min intervals from minute rollups (when Enlighten history is off). Only intervals with >= 90% of
+// seconds logged, and only completed ones. SOC is the last minute's average.
+const localIvSql = db.prepare(`INSERT OR REPLACE INTO cloud_intervals
+    (ts, production, consumption, charge, discharge, grid_import, soc)
+  SELECT (ts/900)*900 AS b, SUM(pv_wh), SUM(load_wh), SUM(chg_wh), SUM(dis_wh), SUM(imp_wh),
+    (SELECT r2.soc FROM rollup_1m r2 WHERE r2.ts >= (r.ts/900)*900 AND r2.ts < (r.ts/900)*900 + 900 ORDER BY r2.ts DESC LIMIT 1)
+  FROM rollup_1m r WHERE ts >= ? AND ts < ? GROUP BY b HAVING SUM(n) >= 810`);
+export function syncLocalIntervals(fromSec) {
+  const end = Math.floor(Date.now() / 1000 / 900) * 900;
+  return Number(localIvSql.run(Math.floor(fromSec / 900) * 900, end).changes);
+}
+
 // Drop per-second rows older than cutoff (RECORD_HISTORY off). Minute rollups and leakage stay.
 export function pruneDetail(cutoffSec) {
   let n = 0;
-  for (const t of ['samples', 'meter_readings', 'battery_units', 'inverters', 'ev_samples']) {
+  for (const t of ['samples', 'meter_readings', 'battery_units', 'inverters', 'ev_samples']) { // inverter_15m is kept
     n += Number(db.prepare(`DELETE FROM ${t} WHERE ts < ?`).run(cutoffSec).changes);
   }
   return n;
@@ -284,6 +303,46 @@ export function batterySeries(fromSec, toSec) {
 export function latestBatteryUnits() {
   return db.prepare(`SELECT b.* FROM battery_units b
     JOIN (SELECT serial, MAX(ts) AS ts FROM battery_units GROUP BY serial) m USING (serial, ts)`).all();
+}
+
+// Each report's watts is the unit's average since its previous report (gap capped at 15 min, so the
+// first report after the night doesn't smear over hours). Energy is split across 15-min buckets.
+const BUCKET = 900;
+const insInv15 = db.prepare('INSERT OR REPLACE INTO inverter_15m (ts, serial, wh) VALUES (?,?,?)');
+export function syncInverter15m(fromSec) {
+  const a = Math.floor(fromSec / BUCKET) * BUCKET;
+  const end = Math.floor(Date.now() / 1000 / BUCKET) * BUCKET; // completed buckets only
+  const rows = db.prepare('SELECT ts, serial, watts FROM inverters WHERE ts > ? AND ts <= ? ORDER BY serial, ts').all(a - BUCKET, end + 1800);
+  const acc = new Map();
+  let prev = null;
+  for (const r of rows) {
+    const p = prev && prev.serial === r.serial ? prev.ts : r.ts - BUCKET;
+    const s = Math.max(p, r.ts - BUCKET), e = r.ts;
+    prev = r;
+    if (!(r.watts > 0) || e <= s) continue;
+    for (let b = Math.floor(s / BUCKET) * BUCKET; b < e; b += BUCKET) {
+      if (b < a || b >= end) continue;
+      const k = `${b}|${r.serial}`;
+      acc.set(k, (acc.get(k) || 0) + (r.watts * (Math.min(e, b + BUCKET) - Math.max(s, b))) / 3600);
+    }
+  }
+  db.exec('BEGIN');
+  try {
+    for (const [k, wh] of acc) { const [ts, serial] = k.split('|'); insInv15.run(Number(ts), serial, wh); }
+    db.exec('COMMIT');
+  } catch (e) { db.exec('ROLLBACK'); throw e; }
+  return acc.size;
+}
+
+// One day's array: per-unit 15-min Wh plus totals, for the Array tab's day comparison.
+export function arrayDay(fromSec, toSec) {
+  const rows = db.prepare('SELECT ts, serial, wh FROM inverter_15m WHERE ts >= ? AND ts < ? ORDER BY ts').all(fromSec, toSec);
+  const serials = [...new Set(rows.map((r) => r.serial))].sort();
+  const t = [...new Set(rows.map((r) => r.ts))].sort((x, y) => x - y);
+  const ti = new Map(t.map((x, i) => [x, i]));
+  const wh = Object.fromEntries(serials.map((s) => [s, Array(t.length).fill(null)]));
+  for (const r of rows) wh[r.serial][ti.get(r.ts)] = r.wh;
+  return { from: fromSec, to: toSec, bucket: BUCKET, t, serials, wh };
 }
 
 export function latestInverters() {
