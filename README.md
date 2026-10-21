@@ -36,8 +36,9 @@ describes (or paste `GATEWAY_TOKEN` yourself and skip even that).
 
 `ENLIGHTEN_CLOUD=1` adds three things from Enlighten's web endpoints:
 
-- **15-min history**, up to 92 days back. The EV advisor learns your solar and load from day one
-  instead of only from what this app has logged, and gaps (computer asleep) are filled in.
+- **15-min history**, 1 year back by default (`ENLIGHTEN_BACKFILL_DAYS`, or `all` for everything
+  since your system was installed). History charts and totals show it wherever there's no 1 s data
+  (before this app was installed, or while the computer slept), and the EV advisor learns from it on day one.
 - **Live-stream fallback**: if the gateway stops answering, the dashboard keeps updating from the
   cloud feed the Enlighten app uses.
 - **Gateway serial lookup**, so you don't have to type it.
@@ -164,6 +165,7 @@ Every `EV_CONTROL_INTERVAL_S` (default 60 s), `src/controller.js` sets the car's
 | `GATEWAY_SERIAL` | | Gateway serial (required unless `ENLIGHTEN_CLOUD=1`) |
 | `GATEWAY_TOKEN` | | Optional: paste a token from entrez.enphaseenergy.com instead of using your login |
 | `ENLIGHTEN_CLOUD` | 0 | 1 = Enlighten history, cloud fallback and serial lookup (see above) |
+| `ENLIGHTEN_BACKFILL_DAYS` | 365 | Days of Enlighten history to import, or `all` |
 | `RECORD_HISTORY` | 0 | 1 = keep every per-second row forever (~20 GB/yr) |
 | `HISTORY_HOURS` | 26 | Per-second rows kept when `RECORD_HISTORY=0` (min 26) |
 | `NOTIFY` | 0 | 1 = push messages to your phone via ntfy |

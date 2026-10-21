@@ -81,6 +81,9 @@ function evMarkersPlugin(getEvents) {
     hooks: {
       draw: [(u) => {
         const evs = getEvents(); if (!evs || !evs.length) return;
+        // Hidden with the EV charging trace when that is switched off in the legend.
+        const evSeries = u.series.find((x) => x.label === 'EV charging');
+        if (evSeries && !evSeries.show) return;
         const { ctx } = u; const { left, top, width, height } = u.bbox;
         const dpr = devicePixelRatio || 1;
         ctx.save(); ctx.beginPath(); ctx.rect(left, top, width, height); ctx.clip();
@@ -134,7 +137,7 @@ function powerChart(el, { sync, onZoom, bands, soc, ev, events, compare } = {}) 
     scales: { x: { time: true }, ...(soc ? { '%': { range: [0, 100] } } : {}) },
     series: [{}, ...SERIES.map((s) => ({
       label: s.label, stroke: css(s.color), width: 1.5, value: (u, v) => fmtW(v, true), points: { show: false },
-    })), ...(ev ? [{ label: 'EV charging', stroke: css('--ev'), fill: css('--ev') + '33', width: 2, value: (u, v) => (v == null ? '–' : fmtW(v, true)), points: { show: false } }] : []), ...(soc ? [{ label: 'Battery SOC', scale: '%', stroke: css('--soc'), width: 2, dash: [6, 4], value: (u, v) => (v == null ? '–' : `${v.toFixed(0)}%`), points: { show: false } }] : []),
+    })), ...(ev ? [{ label: 'EV charging', stroke: css('--ev'), fill: css('--ev') + '40', width: 2.5, paths: uPlot.paths.stepped({ align: 1 }), value: (u, v) => (v == null ? '–' : fmtW(v, true)), points: { show: false } }] : []), ...(soc ? [{ label: 'Battery SOC', scale: '%', stroke: css('--soc'), width: 2, dash: [6, 4], value: (u, v) => (v == null ? '–' : `${v.toFixed(0)}%`), points: { show: false } }] : []),
     ...(compare ? SERIES.slice(0, 3).map((s) => ({
       label: `${s.label.replace(/ \(.*/, '')} (compare)`, stroke: css(s.color) + '99', width: 1.5, dash: [3, 3], show: false,
       value: (u, v) => (v == null ? '–' : fmtW(v, true)), points: { show: false },
@@ -308,13 +311,15 @@ function makePeriod(p) {
   if (p === 'yesterday') return { p, unit: 'day', a: addDays(d0, -1), b: d0 };
   if (p === 'week') { const a = addDays(d0, -((new Date(d0 * 1000).getDay() + 6) % 7)); return { p, unit: 'week', a, b: addDays(a, 7) }; }
   if (p === 'month') { const d = new Date(n * 1000); const a = Math.floor(new Date(d.getFullYear(), d.getMonth(), 1) / 1000); return { p, unit: 'month', a, b: addMonths(a, 1) }; }
-  const len = { '6h': 6 * 3600, '24h': DAY, '7d': 7 * DAY, '30d': 30 * DAY }[p];
+  if (p === 'year') { const a = Math.floor(new Date(new Date(n * 1000).getFullYear(), 0, 1) / 1000); return { p, unit: 'year', a, b: addMonths(a, 12) }; }
+  const len = { '6h': 6 * 3600, '24h': DAY, '7d': 7 * DAY, '30d': 30 * DAY, '12m': 365 * DAY }[p];
   return { p, unit: 'roll', len, a: n - len, b: n };
 }
 function shiftPeriod(P, k) {
   if (P.unit === 'day') return { ...P, a: addDays(P.a, k), b: addDays(P.b, k) };
   if (P.unit === 'week') return { ...P, a: addDays(P.a, 7 * k), b: addDays(P.b, 7 * k) };
   if (P.unit === 'month') return { ...P, a: addMonths(P.a, k), b: addMonths(P.b, k) };
+  if (P.unit === 'year') return { ...P, a: addMonths(P.a, 12 * k), b: addMonths(P.b, 12 * k) };
   return { ...P, a: P.a + k * P.len, b: P.b + k * P.len };
 }
 const fmtDay = (t, opts = {}) => new Date(t * 1000).toLocaleDateString([], { month: 'short', day: 'numeric', ...opts });
@@ -323,6 +328,8 @@ function periodLabel(P) {
   if (P.unit === 'day') return P.a === dayStart(n) ? 'Today' : P.a === addDays(dayStart(n), -1) ? 'Yesterday' : fmtDay(P.a, { weekday: 'short' });
   if (P.unit === 'week') return `Week of ${fmtDay(P.a)}`;
   if (P.unit === 'month') return new Date(P.a * 1000).toLocaleDateString([], { month: 'long', year: 'numeric' });
+  if (P.unit === 'year') return String(new Date(P.a * 1000).getFullYear());
+  if (P.p === '12m' && n - P.b < 120) return 'Last 12 months';
   if (P.p !== 'custom' && n - P.b < 120) return `Last ${P.p.replace('h', ' h').replace('d', ' days')}`;
   return `${fmtDay(P.a)}, ${new Date(P.a * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} – ${fmtDay(P.b)}, ${new Date(P.b * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
 }
@@ -414,7 +421,7 @@ function histKpis(e, leak, c, cLeak, off) {
       sub = `<small class="muted">vs ${f(w)}${delta ? ` · ${delta}` : ''}</small>`;
     }
     return `<div class="kpi"><label>${label}</label><b>${f(v)}</b>${sub}</div>`;
-  }).join('') + `<div class="kpi"><label>1 s data coverage</label><b>${pct(e.coverage)}</b>${c ? `<small class="muted">vs ${pct(c.coverage)}</small>` : ''}</div>`;
+  }).join('') + `<div class="kpi"><label>1 s data coverage</label><b>${pct(e.coverage)}</b>${c ? `<small class="muted">vs ${pct(c.coverage)}</small>` : ''}${e.filled ? `<small class="muted">15-min history for ${pct(e.filled)} of the time; imports there are a lower bound</small>` : ''}</div>`;
   $('cmpNote').textContent = c ? `· vs ${cmpLabel(off)}` : '';
 }
 const sumLeak = (rows) => rows.reduce((s, r) => s + (r.imp_wh || 0), 0);
@@ -422,7 +429,7 @@ const sumLeak = (rows) => rows.reduce((s, r) => s + (r.imp_wh || 0), 0);
 async function loadHistory() {
   if (!hist.chart) {
     hist.chart = powerChart($('histChart'), {
-      sync: 'hist', soc: true, ev: true, compare: true, events: () => hist.evEvents, bands: () => (hist.data && hist.data.res > 1 ? hist.data : null),
+      sync: 'hist', soc: true, ev: true, compare: true, events: () => hist.evEvents, bands: () => (hist.data && hist.data.res > 1 && hist.data.res < 86400 ? hist.data : null),
       onZoom: (a, b) => setView(a, b),
     });
     hist.soc = socChart($('histSoc'), { sync: 'hist' });
@@ -461,7 +468,9 @@ async function loadHistory() {
   };
   hist.evEvents = evMarkers(car.events);
   hist.data = d;
-  $('resNote').textContent = d.res === 1 ? `${d.t.length.toLocaleString()} points · 1 s` : `${d.t.length.toLocaleString()} buckets · ${d.res >= 3600 ? d.res / 3600 + ' h' : d.res / 60 + ' min'} avg (min/max shaded)`;
+  const fromHist = d.cloud ? d.cloud.filter(Boolean).length : 0;
+  $('resNote').textContent = (d.res === 1 ? `${d.t.length.toLocaleString()} points · 1 s` : `${d.t.length.toLocaleString()} buckets · ${d.res >= 86400 ? 'daily' : d.res >= 3600 ? d.res / 3600 + ' h' : d.res / 60 + ' min'} avg${d.res < 86400 ? ' (min/max shaded)' : ''}`)
+    + (fromHist ? ` · ${Math.round((fromHist / d.t.length) * 100)}% from 15-min history (no 1 s data there)` : '');
   hist.chart.setData([d.t, d.pv, d.load, d.grid, d.batt, evOnGrid(d.t, car.series || [], d.res), d.soc, onGrid('pv'), onGrid('load'), onGrid('grid')]);
   for (const i of [7, 8, 9]) hist.chart.setSeries(i, { show: off != null });
   hist.chart.setScale('x', { min: hist.from, max: hist.to });
@@ -473,7 +482,7 @@ async function loadHistory() {
   const key = `${P.a}-${pEnd}`;
   if (hist.navKey !== key) {
     hist.navKey = key;
-    const o = await getJSON(`/api/series?from=${P.a}&to=${pEnd}&res=${pEnd - P.a <= 2 * DAY ? 60 : pEnd - P.a <= 45 * DAY ? 900 : 3600}`);
+    const o = await getJSON(`/api/series?from=${P.a}&to=${pEnd}&res=${pEnd - P.a <= 2 * DAY ? 60 : pEnd - P.a <= 45 * DAY ? 900 : pEnd - P.a <= 120 * DAY ? 3600 : 86400}`);
     hist.nav.setData([o.t, o.pv, o.load, o.grid]);
     hist.nav.setScale('x', { min: P.a, max: pEnd });
   } else hist.nav.redraw();

@@ -53,6 +53,7 @@ echo "They use Enlighten web endpoints that are not a published API; Enphase's t
 set_env ENLIGHTEN_CLOUD "$([ "$(ask 'Use Enlighten cloud features? (y/N)' "$(yn "$(get_env ENLIGHTEN_CLOUD)")")" = y ] && echo 1 || echo 0)"
 if [ "$(get_env ENLIGHTEN_CLOUD)" = 1 ]; then
   set_env ENLIGHTEN_SITE_ID "$(ask 'Enlighten site id (number in the Enlighten URL)' "$(get_env ENLIGHTEN_SITE_ID)")"
+  set_env ENLIGHTEN_BACKFILL_DAYS "$(ask 'Days of Enlighten history to import (or "all")' "$(v=$(get_env ENLIGHTEN_BACKFILL_DAYS); echo "${v:-365}")")"
 fi
 
 echo; echo "-- Tesla control (optional) --"

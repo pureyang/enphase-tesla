@@ -26,6 +26,8 @@ export const config = {
     // Optional Enlighten cloud features (15-min history, live-stream fallback, serial lookup).
     // These use Enlighten's web endpoints, which Enphase's Terms of Service may not allow. Off by default.
     cloud: ['1', 'true', 'on'].includes(String(env.ENLIGHTEN_CLOUD ?? '').toLowerCase()),
+    // How far back to pull Enlighten's 15-min history: days, or "all" for everything the account has.
+    backfillDays: String(env.ENLIGHTEN_BACKFILL_DAYS || '365').toLowerCase() === 'all' ? 'all' : Math.max(31, Number(env.ENLIGHTEN_BACKFILL_DAYS) || 365),
   },
   ev: {
     location: env.LOCATION || '',

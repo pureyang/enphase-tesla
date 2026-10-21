@@ -74,7 +74,10 @@ Write-Host 'Enlighten cloud features: 92 days of history (the EV advisor learns 
 Write-Host 'They use Enlighten web endpoints that are not a published API; Enphase''s terms may not allow it. Default: off, gateway only.'
 $cloud = (Ask 'Use Enlighten cloud features? (y/N)' (YesNo (GetEnv ENLIGHTEN_CLOUD))) -eq 'y'
 SetEnv ENLIGHTEN_CLOUD $(if ($cloud) { '1' } else { '0' })
-if ($cloud) { SetEnv ENLIGHTEN_SITE_ID (Ask 'Enlighten site id (number in the Enlighten URL)' (GetEnv ENLIGHTEN_SITE_ID)) }
+if ($cloud) {
+  SetEnv ENLIGHTEN_SITE_ID (Ask 'Enlighten site id (number in the Enlighten URL)' (GetEnv ENLIGHTEN_SITE_ID))
+  SetEnv ENLIGHTEN_BACKFILL_DAYS (Ask 'Days of Enlighten history to import (or "all")' $(if (GetEnv ENLIGHTEN_BACKFILL_DAYS) { GetEnv ENLIGHTEN_BACKFILL_DAYS } else { '365' }))
+}
 
 # 4. Tesla BLE bridge (optional)
 Write-Host "`n-- Tesla control (optional) --"

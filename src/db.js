@@ -245,7 +245,8 @@ export function pickResolution(spanSec) {
   if (spanSec <= 6 * 3600) return 1;
   if (spanSec <= 4 * 86400) return 60;
   if (spanSec <= 45 * 86400) return 900;
-  return 3600;
+  if (spanSec <= 120 * 86400) return 3600;
+  return 86400;
 }
 
 // Columnar output for uPlot: { res, t:[], pv:[], pv_min:[], ... }
@@ -262,30 +263,120 @@ export function series(fromSec, toSec, res) {
     return out;
   }
   for (const c of COLS) { out[c] = []; out[c + '_min'] = []; out[c + '_max'] = []; }
-  out.n = [];
+  out.n = []; out.cloud = [];
   // Recent minutes may not be rolled up yet; compute from raw for the open tail.
   rollup(Math.max(fromSec, Date.now() / 1000 - 180), Date.now() / 1000 + 60);
-  const rows = db.prepare(`SELECT (ts/CAST(? AS INTEGER))*CAST(? AS INTEGER) AS b, SUM(n) AS n,
+  // Daily buckets start at local midnight, not UTC.
+  const off = res >= 86400 ? localOffset() : 0;
+  const rows = db.prepare(`SELECT ((ts + CAST(? AS INTEGER))/CAST(? AS INTEGER))*CAST(? AS INTEGER) - CAST(? AS INTEGER) AS b, SUM(n) AS n,
       ${COLS.map((c) => `SUM(${c}*n)/SUM(n) AS ${c}, MIN(${c}_min) AS ${c}_min, MAX(${c}_max) AS ${c}_max`).join(', ')}
-    FROM rollup_1m WHERE ts >= ? AND ts < ? GROUP BY b ORDER BY b`).all(res, res, fromSec, toSec);
-  for (const r of rows) {
-    out.t.push(r.b);
+    FROM rollup_1m WHERE ts >= ? AND ts < ? GROUP BY b ORDER BY b`).all(off, res, res, off, fromSec, toSec);
+  // Buckets the logger mostly missed are taken from the 15-min history instead (flat within each interval).
+  const byB = new Map(rows.map((r) => [r.b, { ...r, cloud: 0 }]));
+  for (const [b, v] of intervalBuckets(fromSec, toSec, res)) {
+    const have = byB.get(b);
+    if (!have || have.n < res * 0.5) byB.set(b, v);
+  }
+  for (const b of [...byB.keys()].sort((x, y) => x - y)) {
+    const r = byB.get(b);
+    out.t.push(b);
     out.n.push(r.n);
+    out.cloud.push(r.cloud);
     for (const c of COLS) {
-      out[c].push(r[c]); out[c + '_min'].push(r[c + '_min']); out[c + '_max'].push(r[c + '_max']);
+      out[c].push(r[c]); out[c + '_min'].push(r[c + '_min'] ?? r[c]); out[c + '_max'].push(r[c + '_max'] ?? r[c]);
     }
   }
   return out;
 }
 
+// Seconds east of UTC for this machine's time zone (daily buckets).
+const localOffset = () => -new Date().getTimezoneOffset() * 60;
+
+// One 15-min history interval as Wh, or null if it's implausible (Enlighten has the odd catch-up spike,
+// e.g. 26 kWh in 15 min). Enlighten's grid_import field isn't grid import, so grid comes from the balance;
+// netting within 15 min hides short import spikes, so imports here are a lower bound.
+const IV_MAX_WH = 12000; // 48 kW for 15 min: more than a home service can carry
+function ivEnergy(r) {
+  const pv = r.production, load = r.consumption, chg = r.charge || 0, dis = r.discharge || 0;
+  if (pv == null || load == null || Math.max(pv, load, chg, dis) > IV_MAX_WH) return null;
+  const net = load + chg - pv - dis;                 // + = import
+  const exp = r.export != null ? r.export : Math.max(0, -net);
+  return { pv, load, chg, dis, net, imp: Math.max(0, net + exp), exp, soc: r.soc };
+}
+
+// 15-min history (cloud_intervals: Enlighten's, or built locally) as average watts per bucket.
+// Buckets smaller than 15 min get one point per bucket inside each interval.
+function ivWatts(r) {
+  const e = ivEnergy(r);
+  if (!e) return null;
+  return { pv: e.pv * 4, load: e.load * 4, batt: (e.dis - e.chg) * 4, grid: e.net * 4, soc: e.soc };
+}
+function intervalBuckets(fromSec, toSec, res) {
+  const out = new Map();
+  const ivs = db.prepare('SELECT * FROM cloud_intervals WHERE ts >= ? AND ts < ? ORDER BY ts').all(Math.floor(fromSec / 900) * 900, toSec);
+  if (res < 900) {
+    for (const r of ivs) {
+      const w = ivWatts(r);
+      if (!w) continue;
+      for (let b = Math.ceil(r.ts / res) * res; b < r.ts + 900; b += res) if (b >= fromSec && b < toSec) out.set(b, { ...w, n: 0, cloud: 1 });
+    }
+    return out;
+  }
+  const acc = new Map();
+  for (const r of ivs) {
+    const w = ivWatts(r);
+    if (!w) continue;
+    const off = res >= 86400 ? localOffset() : 0;
+    const b = Math.floor((r.ts + off) / res) * res - off, a = acc.get(b) || { k: 0 };
+    a.k++;
+    for (const c of COLS) if (w[c] != null) a[c] = (a[c] || 0) + w[c];
+    acc.set(b, a);
+  }
+  for (const [b, a] of acc) {
+    const v = { n: 0, cloud: 1 };
+    for (const c of COLS) v[c] = a[c] != null ? a[c] / a.k : null;
+    out.set(b, v);
+  }
+  return out;
+}
+
+// Totals per 15-min slot from the logger's minute rollups; slots it mostly missed come from the
+// 15-min history instead. coverage = share of seconds logged at 1 s; filled = share of slots from history.
 export function energy(fromSec, toSec) {
   rollup(Math.max(fromSec, Date.now() / 1000 - 180), Date.now() / 1000 + 60);
-  const r = db.prepare(`SELECT SUM(n) AS n, SUM(pv_wh) AS produced, SUM(load_wh) AS consumed,
+  const slots = db.prepare(`SELECT (ts/900)*900 AS s, SUM(n) AS n, SUM(pv_wh) AS produced, SUM(load_wh) AS consumed,
       SUM(imp_wh) AS imported, SUM(exp_wh) AS exported, SUM(chg_wh) AS charged, SUM(dis_wh) AS discharged,
       MIN(soc_min) AS soc_min, MAX(soc_max) AS soc_max
-    FROM rollup_1m WHERE ts >= ? AND ts < ?`).get(fromSec, toSec);
+    FROM rollup_1m WHERE ts >= ? AND ts < ? GROUP BY s`).all(fromSec, toSec);
+  const local = new Map(slots.map((r) => [r.s, r]));
+  const ivs = db.prepare('SELECT * FROM cloud_intervals WHERE ts >= ? AND ts < ?').all(fromSec, toSec);
+  const keys = ['produced', 'consumed', 'imported', 'exported', 'charged', 'discharged'];
+  const t = { n: 0, soc_min: null, soc_max: null }; for (const k of keys) t[k] = null;
+  const add = (k, v) => { if (v != null) t[k] = (t[k] || 0) + v; };
+  const soc = (lo, hi) => {
+    if (lo != null) t.soc_min = t.soc_min == null ? lo : Math.min(t.soc_min, lo);
+    if (hi != null) t.soc_max = t.soc_max == null ? hi : Math.max(t.soc_max, hi);
+  };
+  let filled = 0, slotCount = 0;
+  const used = new Set();
+  for (const r of ivs) {
+    const l = local.get(r.ts);
+    slotCount++;
+    if (l && l.n >= 450) continue;
+    const e = ivEnergy(r);
+    if (!e) continue;
+    used.add(r.ts); filled++;
+    add('produced', e.pv); add('consumed', e.load); add('imported', e.imp);
+    add('exported', e.exp); add('charged', e.chg); add('discharged', e.dis); soc(e.soc, e.soc);
+  }
+  for (const l of slots) {
+    t.n += l.n || 0;
+    if (used.has(l.s)) continue;
+    for (const k of keys) add(k, l[k]);
+    soc(l.soc_min, l.soc_max);
+  }
   const expected = Math.max(1, Math.min(toSec, Date.now() / 1000) - fromSec);
-  return { ...r, coverage: Math.min(1, (r.n || 0) / expected) };
+  return { ...t, coverage: Math.min(1, t.n / expected), filled: slotCount ? filled / Math.max(slotCount, slots.length) : 0 };
 }
 
 export function meterSeries(fromSec, toSec, res) {
