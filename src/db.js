@@ -91,7 +91,7 @@ CREATE TABLE IF NOT EXISTS ev_samples (
 `);
 
 // Columns added after first release.
-for (const sql of ['ALTER TABLE cloud_intervals ADD COLUMN export REAL']) {
+for (const sql of ['ALTER TABLE cloud_intervals ADD COLUMN export REAL', 'ALTER TABLE ev_samples ADD COLUMN car TEXT', 'ALTER TABLE ev_samples ADD COLUMN port_open INTEGER']) {
   try { db.exec(sql); } catch {}
 }
 
@@ -153,12 +153,12 @@ export function writeNotification(n) {
   insNote.run(n.ts, n.kind, n.title, n.body, n.amps ?? null, n.sent ? 1 : 0, n.error ?? null);
 }
 const insEv = db.prepare(`INSERT OR REPLACE INTO ev_samples
-  (ts, charging, state, amps_set, current, voltage, power_w, battery, charge_limit, energy_added, plugged, asleep, rssi)
-  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+  (ts, charging, state, amps_set, current, voltage, power_w, battery, charge_limit, energy_added, plugged, asleep, rssi, car, port_open)
+  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
 const bool = (v) => (v == null ? null : v ? 1 : 0);
 export function writeEvSample(tsSec, e) {
   insEv.run(tsSec, bool(e.charging), e.state, e.ampsSet, e.current, e.voltage, e.powerW,
-    e.battery, e.limit, e.energyAdded, bool(e.pluggedIn), bool(e.asleep), e.rssi);
+    e.battery, e.limit, e.energyAdded, bool(e.pluggedIn), bool(e.asleep), e.rssi, e.car ?? null, bool(e.portOpen));
 }
 export function evSeries(fromSec, toSec) {
   return db.prepare('SELECT * FROM ev_samples WHERE ts >= ? AND ts < ? ORDER BY ts').all(fromSec, toSec);

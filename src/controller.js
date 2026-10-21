@@ -46,6 +46,7 @@ export class Controller {
     this.loan = saved.loan ?? { day: null, wh: 0 }; // Wh the car borrowed from the house battery today
     this.wasCharging = saved.wasCharging ?? null;
     this.restUntil = saved.restUntil ?? 0;   // no restart before this (set when we stop a session)
+    this.carKey = saved.carKey ?? null;      // car the session state above belongs to (two cars, one bridge)
     this.exportTicks = 0;
     this.targets = [];                        // recent target amps while charging, for smoothing
     this.lastTick = 0;
@@ -71,7 +72,7 @@ export class Controller {
   }
 
   persist() {
-    this.advisor.state.control = { expect: this.expect, ownSession: this.ownSession, pausedUntil: this.pausedUntil, loan: this.loan, wasCharging: this.wasCharging, restUntil: this.restUntil };
+    this.advisor.state.control = { expect: this.expect, ownSession: this.ownSession, pausedUntil: this.pausedUntil, loan: this.loan, wasCharging: this.wasCharging, restUntil: this.restUntil, carKey: this.carKey };
     this.advisor.save();
   }
 
@@ -89,9 +90,16 @@ export class Controller {
   async step() {
     const now = Math.floor(Date.now() / 1000);
     const car = this.tesla.live();
-    const set = (reason, extra = {}) => { this.status = { enabled: true, active: false, at: now, reason, ...extra }; };
+    const set = (reason, extra = {}) => { this.status = { enabled: true, active: false, at: now, reason, car: car && car.carName, ...extra }; };
     if (config.control.from && new Date().toLocaleDateString('en-CA') < config.control.from) return set(`Starts ${config.control.from}`);
     if (!car) return set('Car not reachable over Bluetooth');
+    // The bridge moved to the other car: what we knew about the session belongs to the old one.
+    if (this.carKey !== car.car) {
+      if (this.carKey) log.info('control', `now controlling ${car.carName}`);
+      this.carKey = car.car;
+      this.expect = null; this.ownSession = false; this.wasCharging = null;
+      this.targets = []; this.startCount = this.stopCount = 0; this.restUntil = 0;
+    }
     await this.watchTransitions(now, car);
     await this.manageLimit(now, car).catch((e) => log.warn('control', `charge limit: ${e.message}`));
     if (car.pluggedIn === false || ['Complete', 'Disconnected'].includes(car.state)) {
@@ -255,10 +263,10 @@ export class Controller {
       if (kind === 'START') this.ownSession = true;
       if (kind === 'STOP') this.ownSession = false;
     }
-    const title = kind === 'STOP' ? 'Auto: stopped EV charging' : kind === 'START' ? `Auto: started EV at ${amps} A` : `Auto: EV ${was} A -> ${amps} A`;
+    const title = carTag(car) + (kind === 'STOP' ? 'Auto: stopped EV charging' : kind === 'START' ? `Auto: started EV at ${amps} A` : `Auto: EV ${was} A -> ${amps} A`);
     const body = `${reason}. Battery ${Math.round(info.soc)}%, grid ${info.importW > 0 ? `+${Math.round(info.importW)}` : `-${Math.round(info.exportW || 0)}`} W.`;
     log.info('control', `${title} (${reason})${ok ? '' : ' FAILED'}`);
-    this.status = { enabled: true, active: true, at: now, reason: title, ...round(info) };
+    this.status = { enabled: true, active: true, at: now, reason: title, car: car.carName, ...round(info) };
 
     writeNotification({ ts: now, kind: `AUTO_${kind}`, title, body: ok ? body : `${body} Command FAILED.`, amps, sent: false, error: ok ? 'log only' : 'command failed' });
   }
@@ -273,13 +281,14 @@ export class Controller {
       .get(now - config.control.intervalS);
     if (r.n < config.control.intervalS / 2 || car.limit == null) return;
     const lr = st.limitRaise;
+    if (lr && lr.car && lr.car !== car.car) return; // raised on the other car: restore when it's back
     if (lr) {
       if (car.limit !== lr.to) { delete st.limitRaise; this.advisor.save(); log.info('control', `charge limit changed to ${car.limit}% outside the app; not restoring`); return; }
       if (r.pv < DAYLIGHT_W || lr.day !== today) {
         await this.wakeIfAsleep(car);
         await this.tesla.setLimit(lr.from);
         delete st.limitRaise; this.advisor.save();
-        writeNotification({ ts: now, kind: 'AUTO_LIMIT', title: `Auto: car charge limit back to ${lr.from}%`, body: 'Solar is down.', amps: null, sent: false, error: 'log only' });
+        writeNotification({ ts: now, kind: 'AUTO_LIMIT', title: `${carTag(car)}Auto: car charge limit back to ${lr.from}%`, body: 'Solar is down.', amps: null, sent: false, error: 'log only' });
         log.info('control', `charge limit restored to ${lr.from}%`);
       }
       return;
@@ -292,8 +301,8 @@ export class Controller {
     if (car.battery < car.limit - 1 || spareW < config.ev.minAmps * volts) return;
     await this.wakeIfAsleep(car);
     await this.tesla.setLimit(to);
-    st.limitRaise = { from: car.limit, to, day: today }; this.advisor.save();
-    await notify({ kind: 'AUTO_LIMIT', title: `Raised car charge limit ${car.limit}% -> ${to}%`,
+    st.limitRaise = { from: car.limit, to, day: today, car: car.car }; this.advisor.save();
+    await notify({ kind: 'AUTO_LIMIT', title: `${carTag(car)}Raised car charge limit ${car.limit}% -> ${to}%`,
       body: `House battery is full (${Math.round(r.soc)}%) and the car reached ${car.battery}%, so ${(spareW / 1000).toFixed(1)} kW of solar would go to the grid. Back to ${car.limit}% after sunset.`,
       priority: 3, tags: ['red_car', 'sunny'] });
   }
@@ -310,12 +319,12 @@ export class Controller {
     if (car.charging) {
       const amps = Math.round(car.ampsSet ?? car.current ?? 0);
       const exp = this.expectedCarSoc(now, car);
-      title = `EV charging started at ${amps} A`;
+      title = `${carTag(car)}EV charging started at ${amps} A`;
       body = `Started by ${who}. Car battery ${car.battery ?? '?'}%`
         + (exp ? `, expected ~${exp.soc}% when solar charging ends around ${exp.at}` : '')
         + ` (limit ${car.limit ?? '?'}%).`;
     } else {
-      title = 'EV charging stopped';
+      title = `${carTag(car)}EV charging stopped`;
       body = `Stopped by ${who}. Car battery ${car.battery ?? '?'}%.${added}`;
     }
     await notify({ kind: car.charging ? 'EV_STARTED' : 'EV_STOPPED', title, body, priority: 3, tags: ['red_car', car.charging ? 'electric_plug' : 'no_entry'] });
@@ -327,10 +336,13 @@ export class Controller {
     const b = plan && plan.best;
     if (car.battery == null || !b || b.endTs <= now) return null;
     const wh = b.watts * (b.endTs - Math.max(now, b.startTs)) / 3600;
-    const soc = Math.min(car.limit || 100, car.battery + (wh * CAR_CHARGE_EFF) / (config.control.carKwh * 1000) * 100);
+    const kwh = (config.tesla.cars.find((c) => c.key === car.car) || {}).kwh || config.control.carKwh;
+    const soc = Math.min(car.limit || 100, car.battery + (wh * CAR_CHARGE_EFF) / (kwh * 1000) * 100);
     return { soc: Math.round(soc), at: new Date(b.endTs * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) };
   }
 }
 
+// "Model Y: " prefix on messages when there are two cars.
+const carTag = (car) => (config.tesla.cars.length > 1 && car && car.carName ? `${car.carName}: ` : '');
 const clock = (ts) => new Date(ts * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 const round = (o) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, typeof v === 'number' ? Math.round(v) : v]));

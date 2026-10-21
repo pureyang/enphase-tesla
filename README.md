@@ -124,6 +124,26 @@ It can't unlock the car or open the trunk, even if someone gets onto the bridge'
 2. In the car, open **Controls > Locks** and delete the old key for the bridge.
 3. Pair again (step 4 above).
 
+### Two cars, one bridge
+
+One NanoC6 can serve two Teslas that share a charger. The bridge talks to one car at a time
+("Active Car" on its web page); the app picks the car:
+
+- **Searching**: while the active car's charge port is closed (or it isn't home), the bridge moves to
+  the other car every 4 minutes. The charge port state comes from the car's security controller,
+  which the bridge reads without waking the car.
+- **Locked**: as soon as a car's charge port is open (cable in), the bridge stays with it until the
+  port closes. Control, messages ("Model Y: EV charging started …") and the charge-limit raise follow
+  that car.
+
+Setup:
+
+1. Set `TESLA_CAR2_NAME` (and `TESLA_CAR1_NAME`) in `.env`, and `tesla_vin_2` / `ble_mac_address_2`
+   in `esphome/secrets.yaml` (the installer asks).
+2. Flash the bridge: `esphome run esphome/tesla-ble.yaml`.
+3. On the bridge page, set **Active Car** to Car 2, sit in that car, press **Pair BLE Key** and tap
+   its key card. The same key is now paired with both cars.
+
 ## How the car control works
 
 Only runs when the Tesla bridge is set up.
@@ -178,6 +198,8 @@ Every `EV_CONTROL_INTERVAL_S` (default 60 s), `src/controller.js` sets the car's
 | `EV_AUTO_FROM` | | First day (YYYY-MM-DD) to take control |
 | `EV_OVERRIDE_MIN` | 120 | Back-off after a manual change |
 | `EV_CAR_KWH` | 75 | Usable pack size, for the expected-SOC estimate |
+| `TESLA_CAR1_NAME` / `TESLA_CAR2_NAME` | | Car names; setting car 2 turns on two-car switching |
+| `EV_CAR2_KWH` | 75 | Second car's usable pack size |
 | `EV_LOAN_WH` | 200 | Daily house-battery loan to ride through clouds at min amps |
 | `EV_LIMIT_RAISE_TO` | 90 | Car charge limit used when the house battery is full (0 = off) |
 | `TESLA_BLE_HOST` / `_USER` / `_PASSWORD` | | Bridge address and web login |

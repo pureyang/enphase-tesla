@@ -22,7 +22,11 @@ const FIELDS = {
   'sensor:ble_signal': 'rssi',
   'switch:ble_connection': 'bleConnected',
   'binary_sensor:pairing_required': 'pairingRequired',
+  'select:active_car': 'activeCar',
+  'cover:charge_port_door': 'portDoor', // from VCSEC: readable without waking the car
 };
+// Kept across a car switch; everything else belongs to the previous car and is cleared.
+const BRIDGE_FIELDS = ['activeCar', 'bleConnected'];
 
 // Event ids look like "sensor-charger_current" (older) or "sensor/Charger Current" (newer).
 function fieldFor(id) {
@@ -48,7 +52,7 @@ export class TeslaSource extends EventEmitter {
   constructor() {
     super();
     this.state = {};
-    this.status = { state: 'idle', error: null, lastEventAt: 0 };
+    this.status = { state: 'idle', error: null, lastEventAt: 0, switchedAt: 0 };
     this.abort = null;
   }
 
@@ -107,14 +111,31 @@ export class TeslaSource extends EventEmitter {
     let d;
     try { d = JSON.parse(data); } catch { return; }
     const f = fieldFor(d.id) || fieldFor(d.name_id);
-    if (f) this.state[f] = parseValue(d);
+    if (!f) return;
+    const v = parseValue(d);
+    if (f === 'activeCar' && this.state.activeCar != null && v !== this.state.activeCar) {
+      log.info('tesla', `active car: ${v}`);
+      this.state = Object.fromEntries(BRIDGE_FIELDS.map((k) => [k, this.state[k]]));
+      this.status.switchedAt = Date.now();
+    }
+    this.state[f] = v;
+  }
+
+  // Which configured car the bridge is talking to (Car 1 if the bridge has no selector).
+  car() {
+    const key = this.state.activeCar || 'Car 1';
+    return config.tesla.cars.find((c) => c.key === key) || config.tesla.cars[0];
   }
 
   // Normalised view: charging = car is actually pulling current.
   current() {
     const s = this.state;
     const charging = s.state === 'Charging' || (typeof s.current === 'number' && s.current > 0.5);
+    const door = s.portDoor;
     return {
+      car: this.car().key,
+      carName: this.car().name,
+      portOpen: door == null ? null : door === true || door === 1 || door === 'OPEN',
       charging,
       state: s.state ?? null,
       ampsSet: s.ampsSet ?? null,
@@ -141,6 +162,8 @@ export class TeslaSource extends EventEmitter {
   setAmps(a) { return this.post(`number/${encodeURIComponent('Charging Amps')}/set?value=${Math.round(a)}`); }
   setLimit(pct) { return this.post(`number/${encodeURIComponent('Charging Limit')}/set?value=${Math.round(pct)}`); }
   setCharging(on) { return this.post(`switch/Charger/${on ? 'turn_on' : 'turn_off'}`); }
+  forceUpdate() { return this.post(`button/${encodeURIComponent('Force data update')}/press`); }
+  setActiveCar(key) { return this.post(`select/${encodeURIComponent('Active Car')}/set?option=${encodeURIComponent(key)}`); }
 
   // Fresh reading for the advisor, or null if the bridge is offline or not talking to the car.
   live(maxAgeMs = 120_000) {

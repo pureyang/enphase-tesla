@@ -10,6 +10,8 @@ substitutions:
   tesla_ble_ref: v2026.10.2
   ble_mac_address: !secret ble_mac_address
   tesla_vin: !secret tesla_vin
+  ble_mac_address_2: !secret ble_mac_address_2
+  tesla_vin_2: !secret tesla_vin_2
 
 esphome:
   name: tesla-ble
@@ -25,6 +27,34 @@ packages:
 # limit, and open the charge port. The car enforces this. Changing it needs a re-pair (README).
 tesla_ble_vehicle:
   role: CHARGING_MANAGER
+
+# Two cars, one bridge: "Active Car" swaps the VIN and Bluetooth address and reconnects. The same key
+# is paired with each car (select the car, then Pair BLE Key in it). Solar Surplus EV switches cars on
+# its own: it alternates while neither charge port is open and stays on a car while it's plugged in.
+# Leave tesla_vin_2 empty for a single car.
+select:
+  - platform: template
+    name: "Active Car"
+    id: active_car
+    options: ["Car 1", "Car 2"]
+    initial_option: "Car 1"
+    optimistic: true
+    restore_value: true
+    on_value:
+      - lambda: |-
+          const bool second = x == "Car 2";
+          const std::string vin = second ? "${tesla_vin_2}" : "${tesla_vin}";
+          const std::string mac = second ? "${ble_mac_address_2}" : "${ble_mac_address}";
+          if (vin.size() != 17) { ESP_LOGW("car", "%s has no VIN configured", x.c_str()); return; }
+          uint64_t addr = 0;
+          for (char c : mac) {
+            int v = c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
+            if (v >= 0) addr = (addr << 4) | v;
+          }
+          ESP_LOGI("car", "Active car: %s (%s)", x.c_str(), mac.c_str());
+          id(tesla_ble_vehicle_id)->set_vin(vin.c_str());
+          id(ble_tesla_id)->set_address(addr);
+          id(ble_tesla_id)->disconnect();
 
 wifi:
   ssid: !secret wifi_ssid

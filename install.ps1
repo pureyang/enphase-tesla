@@ -87,6 +87,7 @@ $tesla = (Ask 'Set up Tesla control? (y/N)' $(if (GetEnv TESLA_BLE_HOST) { 'y' }
 if ($tesla) {
   if (-not (GetEnv TESLA_BLE_USER)) { SetEnv TESLA_BLE_USER 'enphase' }
   if (-not (GetEnv TESLA_BLE_PASSWORD)) { SetEnv TESLA_BLE_PASSWORD (RandomToken) }
+  SetEnv TESLA_CAR1_NAME (Ask 'Name for this car (shown in messages)' $(if (GetEnv TESLA_CAR1_NAME) { GetEnv TESLA_CAR1_NAME } else { 'Car 1' }))
   SetEnv EV_CAR_KWH (Ask 'Car usable battery size, kWh' $(if (GetEnv EV_CAR_KWH) { GetEnv EV_CAR_KWH } else { '75' }))
 
   $sec = 'esphome\secrets.yaml'
@@ -103,6 +104,17 @@ if ($tesla) {
       "ble_mac_address: `"$mac`"", "tesla_vin: `"$vin`""
     ) | Set-Content $sec -Encoding utf8
     Write-Host "Wrote $sec (git-ignored)"
+  }
+  # Optional second car on the same bridge: the app switches between them (README "Two cars").
+  if ((Ask 'Second Tesla charging at this home, same bridge? (y/N)' $(if (GetEnv TESLA_CAR2_NAME) { 'y' } else { 'n' })) -eq 'y') {
+    SetEnv TESLA_CAR2_NAME (Ask 'Name for the second car' $(if (GetEnv TESLA_CAR2_NAME) { GetEnv TESLA_CAR2_NAME } else { 'Car 2' }))
+    SetEnv EV_CAR2_KWH (Ask 'Second car usable battery size, kWh' $(if (GetEnv EV_CAR2_KWH) { GetEnv EV_CAR2_KWH } else { '75' }))
+    $vin2 = (Ask 'Second car VIN (17 characters)').ToUpper()
+    $mac2 = Ask 'Second car Bluetooth MAC (AA:BB:CC:DD:EE:FF)'
+    $lines = Get-Content $sec | Where-Object { $_ -notmatch '^(tesla_vin_2|ble_mac_address_2):' }
+    ($lines + "ble_mac_address_2: `"$mac2`"" + "tesla_vin_2: `"$vin2`"") | Set-Content $sec -Encoding utf8
+  } elseif (-not (Select-String -Path $sec -Pattern '^tesla_vin_2:' -Quiet)) {
+    Add-Content $sec 'ble_mac_address_2: ""', 'tesla_vin_2: ""'
   }
 
   if (-not $SkipFlash -and (Ask 'Flash the NanoC6 over USB now? (y/N)' 'n') -eq 'y') {

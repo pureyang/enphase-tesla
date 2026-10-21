@@ -738,7 +738,8 @@ function evHeadline(ev) {
   const assumed = ev.state && ev.state.assumed;
   const car = assumed && assumed.charging ? `Car assumed charging at ${assumed.amps} A.` : 'Car assumed not charging.';
   const next = (ev.nextAllowedTs > nowSec() ? ` Next message allowed after ${fmtT(ev.nextAllowedTs)}.` : '')
-    + (ev.control && ev.control.enabled ? ` Auto control: ${ev.control.reason}.` : '');
+    + (ev.control && ev.control.enabled ? ` Auto control: ${ev.control.reason}.` : '')
+    + (ev.cars && ev.cars.enabled ? ` Cars (${ev.cars.list.join(', ')}): ${ev.cars.mode === 'locked' ? '🔌 ' : 'searching · '}${ev.cars.reason || ev.cars.car}.` : '');
   if (!p.ok) return `<div class="big stop">No EV charging advised</div><div>${p.reason}</div><div class="muted">${car}</div>`;
   const b = p.best;
   if (b && b.startTs <= nowSec() + 60) {

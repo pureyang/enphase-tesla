@@ -10,6 +10,7 @@ import { startWeather } from './weather.js';
 import { Advisor } from './advisor.js';
 import { TeslaSource } from './sources/tesla.js';
 import { Controller } from './controller.js';
+import { CarSwitcher } from './cars.js';
 import { notify, ntfyUrl } from './notify.js';
 import { log } from './log.js';
 
@@ -20,6 +21,8 @@ startWeather();
 const tesla = new TeslaSource();
 tesla.on('sample', (ts, e) => store.writeEvSample(ts, e));
 tesla.start();
+const cars = new CarSwitcher(tesla);
+cars.start();
 const advisor = new Advisor(collector, tesla);
 advisor.start();
 const controller = new Controller(collector, tesla, advisor);
@@ -119,7 +122,7 @@ const routes = {
     sendJson(res, store.arrayDay(a / 1000, b / 1000));
   },
   '/api/ev': (req, res) => sendJson(res, {
-    ...(advisor.last || {}), state: advisor.state, control: controller.status, ntfy: config.ev.notify ? ntfyUrl() : null,
+    ...(advisor.last || {}), state: advisor.state, control: controller.status, cars: { ...cars.status, list: config.tesla.cars.map((c) => c.name) }, ntfy: config.ev.notify ? ntfyUrl() : null,
     notifications: store.recentNotifications(15), settings: config.ev && { ...config.ev, ntfyTopic: undefined },
   }),
   // Re-run the advisor now (e.g. after telling it what the car is doing).
@@ -144,7 +147,7 @@ const routes = {
   },
   '/api/tesla': (req, res, q) => {
     const [from, to] = range(q);
-    sendJson(res, { status: tesla.status, latest: tesla.current(), series: store.evSeries(from, to), events: store.evEvents(from, to) });
+    sendJson(res, { status: tesla.status, cars: cars.status, latest: tesla.current(), series: store.evSeries(from, to), events: store.evEvents(from, to) });
   },
   '/api/cloud-intervals': (req, res, q) => {
     const [from, to] = range(q);
