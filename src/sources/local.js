@@ -1,4 +1,5 @@
-// Local IQ Gateway (Envoy) poller. 1 Hz livedata + meter readings, slower battery/inverter polls.
+// Local IQ Gateway (Envoy) poller. Fast livedata + meter readings, slower battery/inverter polls.
+// Each loop backs off exponentially on errors so a struggling gateway gets room to recover.
 import https from 'node:https';
 import { EventEmitter } from 'node:events';
 import { config } from '../config.js';
@@ -8,14 +9,19 @@ import { log } from '../log.js';
 
 // Gateway uses a self-signed cert; trust is limited to this agent, which only talks to GATEWAY_HOST.
 const agent = new https.Agent({ rejectUnauthorized: false, keepAlive: true, maxSockets: 4 });
+const MAX_BACKOFF_MS = 30_000;
+const STREAM_RETRY_MS = 30_000;
+const STOP = Symbol('stop'); // returned by a poll fn to end its loop
 
 export class LocalSource extends EventEmitter {
   constructor() {
     super();
     this.name = 'local';
     this.status = { state: 'idle', lastOk: 0, error: null, streamEnabledAt: 0 };
+    this.streamTriedAt = 0;
     this.meterKinds = null; // eid -> measurementType
-    this.timers = [];
+    this.timers = new Set();
+    this.running = false;
   }
 
   enabled() { return Boolean(config.gateway.host); }
@@ -37,7 +43,7 @@ export class LocalSource extends EventEmitter {
         res.on('data', (c) => (buf += c));
         res.on('end', () => {
           if (res.statusCode === 401) return reject(Object.assign(new Error('gateway 401 (token rejected)'), { auth: true }));
-          if (res.statusCode >= 400) return reject(new Error(`gateway ${res.statusCode} on ${path}`));
+          if (res.statusCode >= 400) return reject(Object.assign(new Error(`gateway ${res.statusCode} on ${path}`), { status: res.statusCode }));
           try { resolve(buf ? JSON.parse(buf) : {}); } catch { reject(new Error(`bad JSON from ${path}`)); }
         });
       });
@@ -51,23 +57,39 @@ export class LocalSource extends EventEmitter {
   start() {
     if (!this.enabled()) { this.status.state = 'disabled'; return; }
     this.status.state = 'starting';
-    this.every(1000, () => this.pollLive());
-    this.every(1000, () => this.pollMeters());
+    this.running = true;
+    this.every(config.gateway.livePollMs, () => this.pollLive());
+    this.every(config.gateway.meterPollMs, () => this.pollMeters());
     this.every(30_000, () => this.pollBatteries(), true);
     this.every(300_000, () => this.pollInverters(), true);
   }
 
-  stop() { this.timers.forEach(clearInterval); this.timers = []; }
+  stop() { this.running = false; this.timers.forEach(clearTimeout); this.timers.clear(); }
 
+  // One request at a time per loop (never stacks on a slow gateway). After n consecutive failures
+  // the next try waits ms * 2^n, capped at 30 s (or ms, for loops already slower than that).
   every(ms, fn, immediate = false) {
-    let busy = false;
-    const run = async () => {
-      if (busy) return; // never stack requests if the gateway is slow
-      busy = true;
-      try { await fn(); } catch (e) { this.fail(e); } finally { busy = false; }
+    let failures = 0;
+    let timer = null;
+    const schedule = (delay) => {
+      if (!this.running) return;
+      timer = setTimeout(run, delay);
+      this.timers.add(timer);
     };
-    if (immediate) run();
-    this.timers.push(setInterval(run, ms));
+    const run = async () => {
+      this.timers.delete(timer);
+      const t0 = Date.now();
+      try {
+        if (await fn() === STOP) return;
+        failures = 0;
+        schedule(Math.max(0, ms - (Date.now() - t0))); // keep the cadence: count the request time
+      } catch (e) {
+        failures++;
+        this.fail(e);
+        schedule(Math.min(ms * 2 ** failures, Math.max(ms, MAX_BACKOFF_MS)));
+      }
+    };
+    schedule(immediate ? 0 : ms);
   }
 
   fail(e) {
@@ -78,6 +100,9 @@ export class LocalSource extends EventEmitter {
   }
 
   async enableStream() {
+    // At most one enable POST per 30 s, even if the gateway never reports the stream as enabled.
+    if (Date.now() - this.streamTriedAt < STREAM_RETRY_MS) return;
+    this.streamTriedAt = Date.now();
     await this.request('POST', '/ivp/livedata/stream', { enable: 1 });
     this.status.streamEnabledAt = Date.now();
   }
@@ -100,10 +125,18 @@ export class LocalSource extends EventEmitter {
 
   async pollMeters() {
     if (!this.meterKinds) {
-      const meters = await this.request('GET', '/ivp/meters');
+      let meters;
+      try { meters = await this.request('GET', '/ivp/meters'); } catch (e) {
+        if (e.status !== 404) throw e;
+        meters = []; // firmware without the meters API
+      }
       // Only enabled meters; disabled ones (load/evse/pv3p) report zeros that would pollute charts.
       this.meterKinds = Object.fromEntries(
-        meters.filter((m) => m.state === 'enabled').map((m) => [m.eid, m.measurementType]));
+        (Array.isArray(meters) ? meters : []).filter((m) => m.state === 'enabled').map((m) => [m.eid, m.measurementType]));
+      if (!Object.keys(this.meterKinds).length) {
+        log.info('local', 'no enabled CT meters on this gateway; meter readings polling off');
+        return STOP;
+      }
     }
     const t0 = Date.now();
     const readings = await this.request('GET', '/ivp/meters/readings');

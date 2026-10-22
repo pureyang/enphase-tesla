@@ -184,6 +184,8 @@ Every `EV_CONTROL_INTERVAL_S` (default 60 s), `src/controller.js` sets the car's
 | `GATEWAY_HOST` | `envoy.local` | Gateway IP (use an IP under Docker) |
 | `GATEWAY_SERIAL` | | Gateway serial (required unless `ENLIGHTEN_CLOUD=1`) |
 | `GATEWAY_TOKEN` | | Optional: paste a token from entrez.enphaseenergy.com instead of using your login |
+| `LOCAL_POLL_MS` | 1000 | Gateway livedata poll interval (min 1000; see [Gateway load](#gateway-load)) |
+| `METER_POLL_MS` | 5000 | Gateway CT meter readings poll interval (min 1000) |
 | `ENLIGHTEN_CLOUD` | 0 | 1 = Enlighten history, cloud fallback and serial lookup (see above) |
 | `ENLIGHTEN_BACKFILL_DAYS` | 365 | Days of Enlighten history to import, or `all` |
 | `RECORD_HISTORY` | 0 | 1 = keep every per-second row forever (~20 GB/yr) |
@@ -209,7 +211,7 @@ Every `EV_CONTROL_INTERVAL_S` (default 60 s), `src/controller.js` sets the car's
 
 | Source | Rate | How |
 | --- | --- | --- |
-| Local IQ Gateway (preferred) | 1 s | `GET /ivp/livedata/status` (stream enabled via `POST /ivp/livedata/stream`), `GET /ivp/meters/readings` |
+| Local IQ Gateway (preferred) | 1 s / 5 s | `GET /ivp/livedata/status` (stream enabled via `POST /ivp/livedata/stream`), `GET /ivp/meters/readings` (skipped without enabled CT meters) |
 | Enlighten cloud live stream (fallback, `ENLIGHTEN_CLOUD=1` only) | 1 s | Same feed as the Enlighten app's live view |
 | Gateway battery inventory | 30 s | `GET /ivp/ensemble/inventory` (per-unit SOC, temperature) |
 | Gateway microinverters | 5 min | `GET /api/v1/production/inverters` |
@@ -220,6 +222,20 @@ Every `EV_CONTROL_INTERVAL_S` (default 60 s), `src/controller.js` sets the car's
 The collector writes exactly one row per second from whichever source is healthy. If local data is
 older than `FALLBACK_AFTER_S` (10 s) and `ENLIGHTEN_CLOUD=1`, it starts the cloud stream, and puts
 it back on standby once local has been healthy for 2 min.
+
+### Gateway load
+
+This app polls the gateway far more often than Home Assistant's Enphase integration (60 s by default).
+Fast polling can make some gateways unresponsive, depending on firmware version, whether CT meters are
+installed, and other factors; HA's docs warn of dropped connections, freezes and restarts. To limit that:
+
+- Each poll loop runs one request at a time and backs off on errors (2 s, 4 s, ... up to 30 s), then
+  returns to its normal rate after a success.
+- The livedata stream enable `POST` is sent at most once every 30 s.
+- Meter readings aren't polled when the gateway has no enabled CT meters.
+
+If your gateway drops out, restarts, or the log shows repeated timeouts, raise `LOCAL_POLL_MS` and
+`METER_POLL_MS` (e.g. 5000 and 15000).
 
 Signs follow Enphase: battery **+ = discharging**, grid **+ = importing**.
 

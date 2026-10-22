@@ -71,5 +71,8 @@ export const config = {
     host: env.GATEWAY_HOST || '',
     serial: env.GATEWAY_SERIAL || '',
     token: env.GATEWAY_TOKEN || '',
+    // Fast polls of the gateway. Some firmware/hardware combos stall when polled hard; raise these if so.
+    livePollMs: Math.max(1000, Number(env.LOCAL_POLL_MS || 1000)),
+    meterPollMs: Math.max(1000, Number(env.METER_POLL_MS || 5000)),
   },
 };
