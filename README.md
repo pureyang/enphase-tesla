@@ -170,6 +170,11 @@ Every `EV_CONTROL_INTERVAL_S` (default 60 s), `src/controller.js` sets the car's
   `EV_LIMIT_RAISE_TO` (default 90%) so solar goes to the car instead of the grid, then put back after sunset.
 - Session, loan and plan are saved in `data/ev_state.json`, so a restart doesn't reset them.
 - At night it only stops sessions it started; your own overnight charging is left alone.
+- **Night top-off** (`NIGHT_CHARGE=1`): between `NIGHT_CHARGE_FROM` and `NIGHT_CHARGE_UNTIL` (default
+  midnight-7 AM, PG&E's off-peak start) it charges a plugged-in car at `EV_MAX_AMPS` until the car reaches its
+  own charge limit. This is the one exception to "never from the house battery": any charge the battery
+  still has at midnight goes to the car first. At the end of the window, solar control takes over (or, if
+  it's still dark, the session is stopped).
 - A change in the Tesla app pauses control for `EV_OVERRIDE_MIN` (default 120).
 - Messages when charging starts (with the expected ending car battery %) and when it stops: on the
   dashboard, and on your phone with `NOTIFY=1`.
@@ -204,6 +209,8 @@ Every `EV_CONTROL_INTERVAL_S` (default 60 s), `src/controller.js` sets the car's
 | `EV_CAR2_KWH` | 75 | Second car's usable pack size |
 | `EV_LOAN_WH` | 200 | Daily house-battery loan to ride through clouds at min amps |
 | `EV_LIMIT_RAISE_TO` | 90 | Car charge limit used when the house battery is full (0 = off) |
+| `NIGHT_CHARGE` | 0 | 1 = top off a plugged-in car at `EV_MAX_AMPS` overnight, up to the car's own limit |
+| `NIGHT_CHARGE_FROM` / `_UNTIL` | 00:00 / 07:00 | Night top-off window (local time; PG&E EV2-A / E-ELEC off-peak starts at midnight) |
 | `TESLA_BLE_HOST` / `_USER` / `_PASSWORD` | | Bridge address and web login |
 | `NTFY_TOPIC` | auto | Push topic (generated if blank; setting it also turns on `NOTIFY`) |
 

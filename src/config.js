@@ -66,6 +66,13 @@ export const config = {
     carKwh: Number(env.EV_CAR_KWH || 75),
     // Max Wh a day the car may borrow from the house battery to ride through a dip at min amps (0 = never).
     loanWh: Number(env.EV_LOAN_WH ?? 200), // usable pack size, for the expected-SOC estimate
+    // Night top-off on the off-peak rate (PG&E EV2-A / E-ELEC: off-peak midnight-3 PM every day).
+    // Charges at EV_MAX_AMPS from NIGHT_CHARGE_FROM to NIGHT_CHARGE_UNTIL; the car stops at its own limit.
+    night: {
+      enabled: ['1', 'true', 'on'].includes(String(env.NIGHT_CHARGE ?? '').toLowerCase()),
+      from: env.NIGHT_CHARGE_FROM || '00:00',
+      until: env.NIGHT_CHARGE_UNTIL || '07:00',
+    },
   },
   gateway: {
     host: env.GATEWAY_HOST || '',

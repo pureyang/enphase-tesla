@@ -107,10 +107,13 @@ export class Controller {
       return set(car.pluggedIn === false ? 'Car not plugged in' : `Car ${car.state}`);
     }
 
-    // Manual change in the Tesla app or car screen? Back off.
+    // Manual change in the Tesla app or car screen? Back off. (At night, amps below what we asked is the
+    // car or charger capping the max, not you.)
     const amps = Math.round(car.ampsSet ?? 0);
+    const night = this.nightWindow(now);
     if (this.expect && now - this.expect.ts > 120
-        && (car.charging !== this.expect.charging || (car.charging && Math.abs(amps - this.expect.amps) >= 1))) {
+        && (car.charging !== this.expect.charging
+          || (car.charging && Math.abs(amps - this.expect.amps) >= 1 && !(night && amps < this.expect.amps)))) {
       this.pausedUntil = now + config.control.overrideMin * 60;
       this.expect = null; this.ownSession = false;
       log.info('control', `manual change seen (car ${car.charging ? `charging ${amps} A` : 'stopped'}); paused until ${new Date(this.pausedUntil * 1000).toLocaleTimeString()}`);
@@ -125,6 +128,23 @@ export class Controller {
     const excessW = r.pv - (r.load - carW);  // solar beyond the house, car excluded
     const exportW = Math.max(0, -r.grid);
     const importW = Math.max(0, r.grid);
+
+    // Night top-off: inside the off-peak window, charge at max amps until the car reaches its own limit.
+    // House battery isn't spared (any charge left at midnight goes to the car first), and the loan isn't
+    // counted, so it can't hold back the car's solar charging later in the day.
+    if (night) {
+      const info = { mode: 'night top-off', excessW, exportW, importW, soc: r.soc };
+      const why = `Night top-off: off-peak until ${night.until}`;
+      if (car.battery != null && car.limit != null && car.battery >= car.limit) {
+        return set(`Night top-off: car at its ${car.limit}% limit`, round(info));
+      }
+      // Raise once to max; if the car/charger caps lower, don't re-send every tick.
+      const sentMax = this.expect && this.expect.charging && this.expect.amps === config.ev.maxAmps;
+      if (!car.charging || (amps < config.ev.maxAmps && !sentMax)) return this.command(now, car, config.ev.maxAmps, why, info);
+      set(`${why}, ${amps} A to ${car.limit ?? '?'}%`, round(info));
+      this.status.active = true;
+      return;
+    }
 
     // Loan: battery discharge while the car charges is borrowed; battery charging repays it. Resets daily.
     const today = new Date().toLocaleDateString('en-CA');
@@ -213,6 +233,17 @@ export class Controller {
     }
     set(car.charging ? `Holding ${amps} A` : 'Waiting for excess solar', round(info));
     this.status.active = true;
+  }
+
+  // { until } while now is inside NIGHT_CHARGE_FROM..UNTIL (local time; wraps past midnight), else null.
+  nightWindow(now) {
+    const n = config.control.night;
+    if (!n.enabled) return null;
+    const mins = (hhmm) => { const [h, m] = hhmm.split(':').map(Number); return h * 60 + (m || 0); };
+    const d = new Date(now * 1000), t = d.getHours() * 60 + d.getMinutes();
+    const a = mins(n.from), b = mins(n.until);
+    const inside = a <= b ? t >= a && t < b : t >= a || t < b;
+    return inside ? { until: clock(Math.floor(d.setHours(Math.floor(b / 60), b % 60, 0, 0) / 1000)) } : null;
   }
 
   // Cloudy = solar running well below what the model expected, or heavy forecast cloud this hour.
