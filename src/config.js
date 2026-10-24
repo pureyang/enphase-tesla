@@ -72,6 +72,8 @@ export const config = {
       enabled: ['1', 'true', 'on'].includes(String(env.NIGHT_CHARGE ?? '').toLowerCase()),
       from: env.NIGHT_CHARGE_FROM || '00:00',
       until: env.NIGHT_CHARGE_UNTIL || '07:00',
+      // Winter (PG&E: Oct-May) cap on the night top-off, % (0 = off). The car's own limit still applies if lower.
+      winterMax: Number(env.NIGHT_CHARGE_WINTER_MAX ?? 70),
     },
   },
   gateway: {

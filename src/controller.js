@@ -129,19 +129,22 @@ export class Controller {
     const exportW = Math.max(0, -r.grid);
     const importW = Math.max(0, r.grid);
 
-    // Night top-off: inside the off-peak window, charge at max amps until the car reaches its own limit.
+    // Night top-off: inside the off-peak window, charge at max amps until the car reaches its own limit
+    // (in winter, NIGHT_CHARGE_WINTER_MAX if lower; we stop the session there, the car's limit is untouched).
     // House battery isn't spared (any charge left at midnight goes to the car first), and the loan isn't
     // counted, so it can't hold back the car's solar charging later in the day.
     if (night) {
       const info = { mode: 'night top-off', excessW, exportW, importW, soc: r.soc };
       const why = `Night top-off: off-peak until ${night.until}`;
-      if (car.battery != null && car.limit != null && car.battery >= car.limit) {
-        return set(`Night top-off: car at its ${car.limit}% limit`, round(info));
+      const target = this.nightTarget(now, car);
+      if (car.battery != null && target != null && car.battery >= target) {
+        if (car.charging && this.ownSession) return this.command(now, car, 0, `Night top-off: car reached ${target}%`, info);
+        return set(`Night top-off: car at ${target}% (${target === car.limit ? 'its limit' : 'winter cap'})`, round(info));
       }
       // Raise once to max; if the car/charger caps lower, don't re-send every tick.
       const sentMax = this.expect && this.expect.charging && this.expect.amps === config.ev.maxAmps;
       if (!car.charging || (amps < config.ev.maxAmps && !sentMax)) return this.command(now, car, config.ev.maxAmps, why, info);
-      set(`${why}, ${amps} A to ${car.limit ?? '?'}%`, round(info));
+      set(`${why}, ${amps} A to ${target ?? '?'}%`, round(info));
       this.status.active = true;
       return;
     }
@@ -244,6 +247,15 @@ export class Controller {
     const a = mins(n.from), b = mins(n.until);
     const inside = a <= b ? t >= a && t < b : t >= a || t < b;
     return inside ? { until: clock(Math.floor(d.setHours(Math.floor(b / 60), b % 60, 0, 0) / 1000)) } : null;
+  }
+
+  // Night top-off stop point: the car's limit, capped at NIGHT_CHARGE_WINTER_MAX in PG&E winter (Oct-May).
+  nightTarget(now, car) {
+    const month = new Date(now * 1000).getMonth() + 1;
+    const cap = config.control.night.winterMax;
+    const winter = month >= 10 || month <= 5;
+    if (!winter || !cap) return car.limit ?? null;
+    return car.limit != null ? Math.min(car.limit, cap) : cap;
   }
 
   // Cloudy = solar running well below what the model expected, or heavy forecast cloud this hour.
